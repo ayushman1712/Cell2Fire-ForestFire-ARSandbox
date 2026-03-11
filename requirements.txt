@@ -7,3 +7,5 @@ opencv-python
 tqdm
 deap
 sphinx_rtd_theme
+pygame>=2.6.0
+screeninfo>=0.8.0
