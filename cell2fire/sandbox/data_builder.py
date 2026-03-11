@@ -69,7 +69,7 @@ def generate_ignition_csv(output_dir: str, ignition_cells: list) -> str:
     Returns:
         Path to the generated IgnitionPoints.csv file.
     """
-    filepath = os.path.join(output_dir, "IgnitionPoints.csv")
+    filepath = os.path.join(output_dir, "Ignitions.csv")
 
     with open(filepath, "w") as f:
         f.write("Year,Ncell\n")

@@ -115,8 +115,8 @@ class SimulationBridge:
 
         cmd = [
             exe_path,
-            "--input-instance-folder", self.sim_data_dir,
-            "--output-folder", self.output_dir,
+            "--input-instance-folder", self.sim_data_dir + os.sep,
+            "--output-folder", self.output_dir + os.sep,
             "--ignitions",
             "--sim-years", str(config.SIM_YEARS),
             "--nsims", str(config.N_SIMS),
@@ -148,7 +148,7 @@ class SimulationBridge:
                 proc = subprocess.Popen(
                     exec_array,
                     stdout=log_file,
-                    stderr=subprocess.STDOUT,
+                    stderr=log_file,  # also capture stderr
                 )
                 proc.communicate(timeout=60)  # 60 second timeout
 

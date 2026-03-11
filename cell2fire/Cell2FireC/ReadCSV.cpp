@@ -10,11 +10,25 @@
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
-#include <boost/algorithm/string.hpp>
+#include <cstring>
  
-/*
- * Constructur
- */
+int safe_stoi(const std::string& str, size_t* pos = 0) {
+    try {
+        return std::stoi(str, pos);
+    } catch (const std::exception& e) {
+        std::cerr << "safe_stoi failed on string: '" << str << "'. Error: " << e.what() << std::endl;
+        throw;
+    }
+}
+float safe_stof(const std::string& str, size_t* pos = 0) {
+    try {
+        return std::stof(str, pos);
+    } catch (const std::exception& e) {
+        std::cerr << "safe_stof failed on string: '" << str << "'. Error: " << e.what() << std::endl;
+        throw;
+    }
+}
+
 CSVReader::CSVReader(std::string filename, std::string delm){
 	this->fileName = filename;
 	this->delimeter = delm;		
@@ -39,7 +53,23 @@ std::vector<std::vector<std::string>> CSVReader::getData(){
 	while (getline(file, line))
 	{
 		std::vector<std::string> vec;
-		boost::algorithm::split(vec, line, boost::is_any_of(this->delimeter));
+		std::string token;
+		size_t pos = 0;
+		std::string temp_line = line;
+		if (!temp_line.empty() && temp_line.back() == '\r') {
+			temp_line.pop_back();
+		}
+		if (temp_line.empty()) continue;
+		while ((pos = temp_line.find(this->delimeter)) != std::string::npos) {
+			token = temp_line.substr(0, pos);
+			if (this->delimeter != " " || !token.empty()) {
+				vec.push_back(token);
+			}
+			temp_line.erase(0, pos + this->delimeter.length());
+		}
+		if (this->delimeter != " " || !temp_line.empty()) {
+			vec.push_back(temp_line);
+		}
 		dataList.push_back(vec);
 	}
 	// Close the File
@@ -76,7 +106,7 @@ void CSVReader::parseDF(inputs * df_ptr, std::vector<std::vector<std::string>> &
 	float pdf, cur, elev, lat, lon, ffmc, ws, bui, gfl;
 	
 	// Ints 
-	int mon, jd, jd_min, waz, ps, saz, pc, time, pattern, hour,hourly; //std::stoi (DF[i][1] ,&sz);
+	int mon, jd, jd_min, waz, ps, saz, pc, time, pattern, hour,hourly; //safe_stoi (DF[i][1] ,&sz);
 	
 	// CChar
 	const char * faux;
@@ -86,58 +116,61 @@ void CSVReader::parseDF(inputs * df_ptr, std::vector<std::vector<std::string>> &
 	for (i=1; i <= NCells; i++){
 		//printf("Populating DF for cell %d\n", i);
 		faux = DF[i][0].append(" ").c_str();
-		
+
+		if (DF[i][1].compare("") == 0) mon = 0;
+		else mon = safe_stoi(DF[i][1], &sz);
+
 		if (DF[i][2].compare("") == 0) jd = 0;
-		else jd = std::stoi (DF[i][2] ,&sz);
+		else jd = safe_stoi (DF[i][2] ,&sz);
 		
 		if (DF[i][4].compare("") == 0) jd_min = 0;
-		else jd_min = std::stoi (DF[i][4] ,&sz);
+		else jd_min = safe_stoi (DF[i][4] ,&sz);
 		
 		if (DF[i][10].compare("") == 0) waz = 0;
-		else waz = std::stoi (DF[i][10] ,&sz) + 180.;// + 2*90;  // CHECK!!!!
+		else waz = safe_stoi (DF[i][10] ,&sz) + 180.;// + 2*90;  // CHECK!!!!
 		if (waz >= 360) waz = waz - 360;
 		
 		if (DF[i][12].compare("") == 0) ps = 0;
-		else ps = std::stoi (DF[i][12] ,&sz);
+		else ps = (int)safe_stof (DF[i][12] ,&sz);
 		
 		if (DF[i][13].compare("") == 0) saz = 0;
-		else saz = std::stoi (DF[i][13] ,&sz);
+		else saz = (int)safe_stof (DF[i][13] ,&sz);
 		
 		if (DF[i][14].compare("") == 0) pc = 0;
-		else pc = std::stoi (DF[i][14] ,&sz);
+		else pc = safe_stoi (DF[i][14] ,&sz);
 		
 		if (DF[i][15].compare("") == 0) pdf = 0;
-		else pdf = std::stoi (DF[i][15] ,&sz);
+		else pdf = safe_stoi (DF[i][15] ,&sz);
 		
 		if (DF[i][17].compare("") == 0) cur = 0;
-		else cur = std::stoi (DF[i][17] ,&sz);
+		else cur = safe_stof (DF[i][17] ,&sz);
 		
 		if (DF[i][7].compare("") == 0) elev = 0;
-		else elev = std::stoi (DF[i][7] ,&sz);
+		else elev = safe_stof (DF[i][7] ,&sz);
 		
 		if (DF[i][18].compare("") == 0) time = 0;
-		else time = std::stoi (DF[i][18] ,&sz); 
+		else time = safe_stoi (DF[i][18] ,&sz); 
 		
 		if (DF[i][5].compare("") == 0) lat = 0;
-		else lat = std::stof (DF[i][5], &sz);
+		else lat = safe_stof (DF[i][5], &sz);
 		
 		if (DF[i][6].compare("") == 0) lon = 0;
-		else lon = std::stof (DF[i][6], &sz);
+		else lon = safe_stof (DF[i][6], &sz);
 		
 		if (DF[i][8].compare("") == 0) ffmc = 0;
-		else ffmc = std::stof (DF[i][8], &sz);
+		else ffmc = safe_stof (DF[i][8], &sz);
 		
 		if (DF[i][9].compare("") == 0) ws = 0;
-		else ws = std::stof (DF[i][9], &sz);
+		else ws = safe_stof (DF[i][9], &sz);
 		
 		if (DF[i][11].compare("") == 0) bui = 0;
-		else bui = std::stof (DF[i][11], &sz);
+		else bui = safe_stof (DF[i][11], &sz);
 		
 		if (DF[i][16].compare("") == 0) gfl = 0;
-		else gfl = std::stof (DF[i][16], &sz);
+		else gfl = safe_stof (DF[i][16], &sz);
 		
 		if (DF[i][18].compare("") == 0) pattern = 0;
-		else pattern = 1;// std::stoi (DF[i][18], &sz);
+		else pattern = 1;// safe_stoi (DF[i][18], &sz);
 		
 		
 			
@@ -173,7 +206,7 @@ void CSVReader::parseNDF(std::vector<int> &NFTypes, std::vector<std::vector<std:
 	for (i=1; i <= NCells; i++){
 		//printf("Populating DF for cell %d\n", i);
 		if (DF[i][20].compare("") == 0) FType = 0;
-		else FType = std::stoi (DF[i][20], &sz);
+		else FType = safe_stoi (DF[i][20], &sz);
 			
 		// Set values
 		NFTypes.push_back(FType);
@@ -208,41 +241,41 @@ void CSVReader::parseWeatherDF(weatherDF * wdf_ptr, std::vector<std::vector<std:
 		datetime = DF[i][1];
 		
 		if (DF[i][6].compare("") == 0) waz = 0;
-		else {waz = std::stoi (DF[i][6] ,&sz); //+ 180/2;   // DEBUGGING THE ANGLE 
+		else {waz = safe_stoi (DF[i][6] ,&sz); //+ 180/2;   // DEBUGGING THE ANGLE 
 			if (waz >= 360){
 				waz = waz - 360;
 			}
 		}
 		
 		if (DF[i][2].compare("") == 0) apcp = 0;
-		else apcp = std::stof (DF[i][2], &sz);
+		else apcp = safe_stof (DF[i][2], &sz);
 		
 		if (DF[i][3].compare("") == 0) tmp = 0;
-		else tmp = std::stof (DF[i][3], &sz);
+		else tmp = safe_stof (DF[i][3], &sz);
 		
 		if (DF[i][4].compare("") == 0) rh = 0;
-		else rh = std::stof (DF[i][4], &sz);
+		else rh = safe_stof (DF[i][4], &sz);
 		
 		if (DF[i][5].compare("") == 0) ws = 0;
-		else ws = std::stof (DF[i][5], &sz);
+		else ws = safe_stof (DF[i][5], &sz);
 		
 		if (DF[i][7].compare("") == 0) ffmc = 0;
-		else ffmc = std::stof (DF[i][7], &sz);
+		else ffmc = safe_stof (DF[i][7], &sz);
 		
 		if (DF[i][8].compare("") == 0) dmc = 0;
-		else dmc = std::stof (DF[i][8], &sz);
+		else dmc = safe_stof (DF[i][8], &sz);
 		
 		if (DF[i][9].compare("") == 0) dc = 0;
-		else dc = std::stof (DF[i][9], &sz);
+		else dc = safe_stof (DF[i][9], &sz);
 				
 		if (DF[i][10].compare("") == 0) isi = 0;
-		else isi = std::stof (DF[i][10], &sz);
+		else isi = safe_stof (DF[i][10], &sz);
 		
 		if (DF[i][11].compare("") == 0) bui = 0;
-		else bui = std::stof (DF[i][11], &sz);
+		else bui = safe_stof (DF[i][11], &sz);
 		
 		if (DF[i][12].compare("") == 0) fwi = 0;
-		else fwi = std::stof (DF[i][12], &sz);
+		else fwi = safe_stof (DF[i][12], &sz);
 		
 		// Set values
 		wdf_ptr->scenario = scenario;
@@ -269,7 +302,7 @@ void CSVReader::parseIgnitionDF(std::vector<int> & ig, std::vector<std::vector<s
 	// Loop over cells (populating per row)
 	for (i=1; i <= IgPeriods; i++){
 		//DEBUGprintf("Populating Ignition points: %d\n", i);
-		igcell = std::stoi(DF[i][1], &sz);
+		igcell = safe_stoi(DF[i][1], &sz);
 		
 		// Set values
 		ig[i-1]= igcell;
@@ -297,7 +330,7 @@ void CSVReader::parseHarvestedDF(std::unordered_map<int, std::vector<int>> & hc,
 		
 		// Loop over years of the simulation
 		for(j=1; j < DF[i].size(); j++){
-			hcell = std::stoi(DF[i][j], &sz);
+			hcell = safe_stoi(DF[i][j], &sz);
 		
 			// Set values
 			toHarvestCells.push_back(hcell);
@@ -327,10 +360,10 @@ void CSVReader::parseBBODF(std::unordered_map<int, std::vector<float>> & bbo, st
 		bboFactors.clear();
 		
 		//DEBUGprintf("Populating Ignition points: %d\n", i);
-		ftype = std::stoi(DF[i][0], &sz);
+		ftype = safe_stoi(DF[i][0], &sz);
 		
 		for (j=1; j <= ffactors; j++){
-			bboFactors.push_back(std::stof(DF[i][j], &sz));
+			bboFactors.push_back(safe_stof(DF[i][j], &sz));
 		}
 
 		//Set values							 
@@ -364,9 +397,9 @@ void CSVReader::parseForestDF(forestDF * frt_ptr, std::vector<std::vector<std::s
 	// Filling DF
 	//DEBUGprintf("Populating Forest DF\n");
 	
-	cols = std::stoi (DF[0][1], &sz);
-	rows = std::stoi (DF[1][1], &sz);
-	cellside = std::stoi (DF[4][1], &sz);
+	cols = safe_stoi (DF[0][1], &sz);
+	rows = safe_stoi (DF[1][1], &sz);
+	cellside = safe_stoi (DF[4][1], &sz);
 	
 	//DEBUGprintf("cols: %d,  rows:  %d,   cellside:  %d\n", cols, rows, cellside);
 	
