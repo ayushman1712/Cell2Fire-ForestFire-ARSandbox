@@ -247,3 +247,16 @@ class TerrainGenerator:
             "fuel": fuel_grid,
             "files": files,
         }
+
+    def generate_preview(self, depth_frame: np.ndarray) -> dict:
+        """Fast memory-only pipeline for live continuous preview.
+        
+        Only calculates elevation and fuel classification to render the Pygame HUD.
+        Does not compute heavy slope/aspect gradients or write .asc files to disk.
+        """
+        elevation = self.depth_to_elevation(depth_frame)
+        fuel_grid = self.classify_fuel(elevation)
+        return {
+            "elevation": elevation,
+            "fuel": fuel_grid,
+        }

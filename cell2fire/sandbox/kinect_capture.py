@@ -12,8 +12,9 @@ from . import config
 try:
     from pykinect2 import PyKinectV2, PyKinectRuntime
     HAS_PYKINECT = True
-except ImportError:
+except Exception as e:
     HAS_PYKINECT = False
+    print(f"[KinectCapture] Exception importing pykinect2: {e}")
 
 
 class KinectCapture:
@@ -26,6 +27,7 @@ class KinectCapture:
     def __init__(self):
         self.kinect = None
         self.has_kinect = False
+        self._last_valid_frame = None
 
         if HAS_PYKINECT:
             try:
@@ -52,9 +54,12 @@ class KinectCapture:
         if self.has_kinect and self.kinect is not None:
             if self.kinect.has_new_depth_frame():
                 depth = self.kinect.get_last_depth_frame()
-                return depth.reshape(
+                self._last_valid_frame = depth.reshape(
                     (config.KINECT_FRAME_HEIGHT, config.KINECT_FRAME_WIDTH)
                 )
+            
+            if self._last_valid_frame is not None:
+                return self._last_valid_frame
 
         # ── Fallback: load depth.png ──
         return self._load_fallback_image()

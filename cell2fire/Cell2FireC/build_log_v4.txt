@@ -1,0 +1,1 @@
+g++ -o Cell2Fire -m64 -fno-strict-aliasing -fexceptions -DNDEBUG -DIL_STD Cell2Fire.o CellsFBP.o FBPfunc5_NoDebug.o SpottingFBP.o ReadCSV.o ReadArgs.o Lightning.o WriteCSV.o Ellipse.o

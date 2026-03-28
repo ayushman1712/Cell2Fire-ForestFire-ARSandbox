@@ -377,7 +377,7 @@ std::vector<int> CellsFBP::manageFire(int period, std::unordered_set<int> & Avai
 	}
 	/*                         */
 	
-    double cartesianAngle = 270 - mainstruct.raz; //                 - 90;   // CHECK!!!!!
+    double cartesianAngle = 90 - mainstruct.raz; //                 - 90;   // CHECK!!!!!
 	if (cartesianAngle < 0){
 		cartesianAngle += 360;
 	} 
@@ -620,7 +620,7 @@ std::vector<int> CellsFBP::manageFireBBO(int period, std::unordered_set<int> & A
 	}
 	/*                         */
 	
-    double cartesianAngle = 270 - mainstruct.raz; //                 - 90;   // CHECK!!!!!
+    double cartesianAngle = 90 - mainstruct.raz; //                 - 90;   // CHECK!!!!!
 	if (cartesianAngle < 0){
 		cartesianAngle += 360;
 	} 

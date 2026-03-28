@@ -1,0 +1,7 @@
+g++ -c -std=c++11 -O3 -Ieigen3 CellsFBP.cpp
+g++ -c -std=c++11 -O3 -Ieigen3 Cell2Fire.cpp
+g++ -o Cell2Fire -m64 -fno-strict-aliasing -fexceptions -DNDEBUG -DIL_STD -lm -lpthread Cell2Fire.o CellsFBP.o FBPfunc5_NoDebug.o SpottingFBP.o ReadCSV.o ReadArgs.o Lightning.o WriteCSV.o Ellipse.o
+c:/mingw/bin/../lib/gcc/mingw32/6.3.0/../../../../mingw32/bin/ld.exe: cannot find -lpthread
+collect2.exe: error: ld returned 1 exit status
+Makefile:22: recipe for target 'Cell2Fire' failed
+mingw32-make: *** [Cell2Fire] Error 1

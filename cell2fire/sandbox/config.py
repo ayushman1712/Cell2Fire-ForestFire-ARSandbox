@@ -11,7 +11,7 @@ import tempfile
 # ═══════════════════════════════════════════════════════════
 SIM_ROWS = 40                    # Number of rows in the simulation grid
 SIM_COLS = 40                    # Number of columns in the simulation grid
-CELL_SIZE_METERS = 20.0          # Physical size of each cell in meters (for FBP model)
+CELL_SIZE_METERS = 50.0          # Physical size of each cell in meters (for FBP model)
 
 # ═══════════════════════════════════════════════════════════
 # Kinect v2 Depth Sensor

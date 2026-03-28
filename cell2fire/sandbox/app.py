@@ -64,6 +64,7 @@ class SandboxApp:
 
         # Terrain state
         self.terrain_captured = False
+        self.live_capture = False
         self.elevation = None
         self.fuel_grid = None
 
@@ -111,7 +112,11 @@ class SandboxApp:
             self.running = False
 
         elif key == pygame.K_SPACE:
-            self._capture_terrain()
+            self.live_capture = not self.live_capture
+            if self.live_capture:
+                self.sim_status = "Live Capture ON — Press SPACE to pause"
+            else:
+                self.sim_status = "Live Capture PAUSED — Press SPACE to resume"
 
         elif key == pygame.K_r:
             self._reset_simulation()
@@ -162,6 +167,18 @@ class SandboxApp:
 
         self.sim_status = f"Ignition set at ({row}, {col}). Running simulation..."
         print(f"[App] Ignition at grid ({row}, {col}), cell ID = {self.ignition_cell_id}")
+
+        # Stop live capture and commit the terrain for simulation
+        self.live_capture = False
+        self.sim_status = "Committing terrain geometry and running Cell2Fire..."
+        self._render_frame()
+
+        # Capture definitive full terrain files
+        depth_frame = self.kinect.get_depth_frame()
+        if depth_frame is not None:
+            self.sim_bridge.prepare_terrain(depth_frame)
+        else:
+            print("[App] WARNING: Could not get depth frame for final terrain generation.")
 
         # Run the simulation
         self._run_simulation()
@@ -300,6 +317,16 @@ class SandboxApp:
         try:
             while self.running:
                 self.handle_events()
+                
+                # Continuous live capture
+                if self.live_capture and not self.sim_running and self.ignition_point is None:
+                    depth_frame = self.kinect.get_depth_frame()
+                    if depth_frame is not None:
+                        result = self.terrain_gen.generate_preview(depth_frame)
+                        self.elevation = result["elevation"]
+                        self.fuel_grid = result["fuel"]
+                        self.terrain_captured = True
+
                 self._update_fire_animation()
                 self._render_frame()
                 self.renderer.tick()
