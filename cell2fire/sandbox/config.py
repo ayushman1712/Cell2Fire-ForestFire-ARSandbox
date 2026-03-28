@@ -60,7 +60,7 @@ DEFAULT_FUEL_TYPE = 2  # C2 Boreal Spruce (fallback)
 # ═══════════════════════════════════════════════════════════
 # Cell2Fire Simulation Parameters
 # ═══════════════════════════════════════════════════════════
-FIRE_PERIOD_LENGTH = 1.0         # Fire period length in minutes
+FIRE_PERIOD_LENGTH = 0.2         # Fire period length in minutes (smaller = more output grids)
 SIM_YEARS = 1                    # Number of years per simulation
 N_SIMS = 1                       # Number of replications
 ROS_CV = 0.0                     # Rate of Spread coefficient of variation (0 = deterministic)
@@ -151,6 +151,27 @@ CELL2FIRE_EXE = os.path.join(_THIS_DIR, "..", "Cell2FireC", "Cell2Fire")
 
 # Fallback depth image for development without Kinect
 FALLBACK_DEPTH_IMAGE = os.path.join(_THIS_DIR, "depth.png")
+
+# ═══════════════════════════════════════════════════════════
+# Precomputed Simulation Cache
+# ═══════════════════════════════════════════════════════════
+PRECOMPUTED_CACHE_DIR = os.path.join(tempfile.gettempdir(), "cell2fire_sandbox_cache")
+PRECOMPUTED_CACHE_FILE = os.path.join(PRECOMPUTED_CACHE_DIR, "fire_sim_cache.npz")
+
+# Default ignition point for precomputed simulation (row, col in grid coords)
+# Center of grid by default — adjust to match your scenario
+DEFAULT_IGNITION_ROW = SIM_ROWS // 2
+DEFAULT_IGNITION_COL = SIM_COLS // 2
+
+# ═══════════════════════════════════════════════════════════
+# Hillshade Rendering (AR Sandbox style)
+# ═══════════════════════════════════════════════════════════
+HILLSHADE_AZIMUTH = 315          # Light source azimuth (degrees)
+HILLSHADE_ALTITUDE = 45          # Light source altitude (degrees)
+HILLSHADE_VERT_EXAG = 4          # Vertical exaggeration for hillshade
+HILLSHADE_BLEND_MODE = "soft"    # Blend mode: 'soft', 'overlay', 'hsv'
+CONTOUR_LEVELS = 10              # Number of contour lines to draw
+CONTOUR_COLOR = (220, 220, 220, 80)  # Semi-transparent white contour lines
 
 # Geo-reference constants (arbitrary, needed for .asc header)
 XLLCORNER = 457900

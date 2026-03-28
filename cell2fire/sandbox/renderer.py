@@ -1,346 +1,208 @@
 # coding: utf-8
 """
-Pygame-based renderer for the AR Sandbox fire simulation.
-Renders terrain, fire state, wind indicator, and HUD overlay.
+Image generation engine for the AR Sandbox fire simulation.
+Produces numpy arrays (no display framework dependency).
 """
 import math
 import numpy as np
 
 try:
-    import pygame
-    HAS_PYGAME = True
+    import cv2
+    HAS_CV2 = True
 except ImportError:
-    HAS_PYGAME = False
+    HAS_CV2 = False
+
+try:
+    from matplotlib.colors import LightSource
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
 
 from . import config
 
 
 class SandboxRenderer:
-    """Renders the fire simulation state onto a Pygame display surface.
+    """Generates terrain and fire images as numpy arrays.
 
-    Layers (back to front):
-        1. Terrain biome coloring (from fuel grid)
-        2. Elevation contour lines
-        3. Fire state overlay (burning/burned)
-        4. Wind direction indicator
-        5. HUD (weather info, simulation time)
+    Pure image generator — no Pyglet/Pygame dependency.
+    The app layer converts these arrays to display textures.
     """
 
-    def __init__(
-        self,
-        width: int = None,
-        height: int = None,
-        sim_rows: int = None,
-        sim_cols: int = None,
-    ):
-        if not HAS_PYGAME:
-            raise ImportError("pygame is required for the sandbox renderer")
-
-        self.width = width or config.PROJECTOR_WIDTH
-        self.height = height or config.PROJECTOR_HEIGHT
-        self.sim_rows = sim_rows or config.SIM_ROWS
-        self.sim_cols = sim_cols or config.SIM_COLS
-
-        # Calculate cell display size (pixels per simulation cell)
+    def __init__(self, display_width=None, display_height=None):
+        self.width = display_width or config.PROJECTOR_WIDTH
+        self.height = display_height or config.PROJECTOR_HEIGHT
+        self.sim_rows = config.SIM_ROWS
+        self.sim_cols = config.SIM_COLS
         self.cell_w = self.width / self.sim_cols
         self.cell_h = self.height / self.sim_rows
 
-        # Initialize Pygame display
-        pygame.init()
-        self.screen = pygame.display.set_mode((self.width, self.height))
-        pygame.display.set_caption("Cell2Fire AR Sandbox")
-        self.clock = pygame.time.Clock()
+        if HAS_MATPLOTLIB:
+            self.lightsource = LightSource(
+                azdeg=config.HILLSHADE_AZIMUTH,
+                altdeg=config.HILLSHADE_ALTITUDE,
+            )
+        else:
+            self.lightsource = None
 
-        # Font for HUD
-        pygame.font.init()
-        self.font_large = pygame.font.SysFont("Consolas", 18)
-        self.font_small = pygame.font.SysFont("Consolas", 14)
+        self._cached_terrain = None
+        self._cached_hash = None
 
-        # Pre-allocate surfaces
-        self.terrain_surface = pygame.Surface((self.width, self.height))
-        self.fire_surface = pygame.Surface(
-            (self.width, self.height), pygame.SRCALPHA
-        )
+    # ── Terrain ──────────────────────────────────────────────
 
-    def render_terrain(self, fuel_grid: np.ndarray, elevation: np.ndarray = None):
-        """Draw terrain biome coloring from the fuel type grid.
+    def generate_terrain_image(self, elevation, fuel_grid=None):
+        """Generate AR Sandbox-style hillshade terrain as RGB numpy array.
 
-        Args:
-            fuel_grid: 2D int array (rows × cols) with FBP fuel type codes.
-            elevation: Optional 2D float array for contour lines.
+        Returns:
+            np.ndarray of shape (height, width, 3) uint8 RGB.
         """
-        self.terrain_surface.fill(config.COLOR_BACKGROUND)
+        elev_hash = hash(elevation.tobytes())
+        if self._cached_terrain is not None and elev_hash == self._cached_hash:
+            return self._cached_terrain.copy()
 
-        for r in range(self.sim_rows):
-            for c in range(self.sim_cols):
-                fuel_val = int(fuel_grid[r, c])
-                color = config.FUEL_COLORS.get(fuel_val, config.COLOR_CONIFER)
+        if HAS_CV2 and HAS_MATPLOTLIB:
+            elev_hires = cv2.resize(
+                elevation, (self.width, self.height),
+                interpolation=cv2.INTER_CUBIC,
+            )
+            rgba = self.lightsource.shade(
+                elev_hires, cmap=plt.cm.gist_earth,
+                vert_exag=config.HILLSHADE_VERT_EXAG,
+                blend_mode=config.HILLSHADE_BLEND_MODE,
+                dx=1, dy=1,
+            )
+            rgb = (rgba[:, :, :3] * 255).astype(np.uint8)
+            self._draw_contours(rgb, elev_hires)
+        else:
+            e_norm = (elevation - elevation.min()) / max(elevation.max() - elevation.min(), 1)
+            rgb = np.zeros((self.sim_rows, self.sim_cols, 3), dtype=np.uint8)
+            rgb[:, :, 1] = (80 + e_norm * 120).astype(np.uint8)
+            rgb[:, :, 0] = (20 + e_norm * 40).astype(np.uint8)
+            if HAS_CV2:
+                rgb = cv2.resize(rgb, (self.width, self.height), interpolation=cv2.INTER_NEAREST)
 
-                rect = pygame.Rect(
-                    int(c * self.cell_w),
-                    int(r * self.cell_h),
-                    int(self.cell_w) + 1,
-                    int(self.cell_h) + 1,
-                )
-                pygame.draw.rect(self.terrain_surface, color, rect)
+        # Overlay water cells
+        if fuel_grid is not None and HAS_CV2:
+            water = cv2.resize(
+                (fuel_grid == 102).astype(np.float32),
+                (self.width, self.height), interpolation=cv2.INTER_CUBIC,
+            )
+            water = np.clip(water, 0, 1)
+            wc = np.array(config.COLOR_WATER, dtype=np.float32)
+            for ch in range(3):
+                rgb[:, :, ch] = (rgb[:, :, ch] * (1 - water * 0.5) + wc[ch] * water * 0.5).astype(np.uint8)
 
-        # Draw elevation contour lines if provided
-        if elevation is not None:
-            self._draw_contours(elevation)
+        self._cached_terrain = rgb.copy()
+        self._cached_hash = elev_hash
+        return rgb
 
-    def _draw_contours(self, elevation: np.ndarray, n_contours: int = 8):
-        """Draw subtle contour lines on the terrain surface."""
-        elev_min = elevation.min()
-        elev_max = elevation.max()
-        if elev_max - elev_min < 1:
+    def _draw_contours(self, image, elevation):
+        """Draw elevation contour lines onto an RGB image."""
+        emin, emax = elevation.min(), elevation.max()
+        if emax - emin < 1:
             return
+        n = config.CONTOUR_LEVELS
+        norm = ((elevation - emin) / (emax - emin) * 255).astype(np.uint8)
+        cr, cg, cb = config.CONTOUR_COLOR[:3]
+        alpha = config.CONTOUR_COLOR[3] / 255.0
+        for i in range(1, n):
+            _, binary = cv2.threshold(norm, int(i * 255 / n), 255, cv2.THRESH_BINARY)
+            contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            overlay = image.copy()
+            cv2.drawContours(overlay, contours, -1, (cr, cg, cb), 1, cv2.LINE_AA)
+            cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
 
-        contour_step = (elev_max - elev_min) / n_contours
-        contour_color = (255, 255, 255, 40)  # semi-transparent white
+    # ── Fire Overlay ─────────────────────────────────────────
 
-        contour_surface = pygame.Surface(
-            (self.width, self.height), pygame.SRCALPHA
+    def generate_fire_overlay(self, fire_grid, frame):
+        """Generate smooth fire RGBA overlay at display resolution.
+
+        Returns:
+            np.ndarray of shape (height, width, 4) uint8 RGBA.
+        """
+        if not HAS_CV2:
+            return self._fire_fallback(fire_grid)
+
+        burning = (fire_grid == 1).astype(np.float32)
+        burned = (fire_grid == 2).astype(np.float32)
+
+        # Upscale with smooth interpolation + Gaussian blur
+        ks = max(int(self.cell_w * 0.8) | 1, 3)
+        burn_hi = np.clip(cv2.GaussianBlur(
+            cv2.resize(burning, (self.width, self.height), interpolation=cv2.INTER_CUBIC),
+            (ks, ks), 0), 0, 1)
+        burned_hi = np.clip(cv2.GaussianBlur(
+            cv2.resize(burned, (self.width, self.height), interpolation=cv2.INTER_CUBIC),
+            (ks, ks), 0), 0, 1)
+
+        overlay = np.zeros((self.height, self.width, 4), dtype=np.uint8)
+
+        # Animated flicker
+        phase = frame * 0.15
+        y = np.arange(self.height).reshape(-1, 1).astype(np.float32)
+        x = np.arange(self.width).reshape(1, -1).astype(np.float32)
+        noise = np.clip(
+            np.sin(phase + y * 0.08 + x * 0.05) * 0.3
+            + np.sin(phase * 1.7 + y * 0.12 - x * 0.09) * 0.2
+            + 0.5, 0, 1
         )
 
-        for level in range(1, n_contours):
-            threshold = elev_min + level * contour_step
+        intensity = burn_hi * noise
+        overlay[:, :, 0] = (intensity * 255).astype(np.uint8)
+        overlay[:, :, 1] = (intensity * 120 * noise).astype(np.uint8)
+        overlay[:, :, 2] = (intensity * 20).astype(np.uint8)
+        overlay[:, :, 3] = (burn_hi * 220).astype(np.uint8)
 
-            for r in range(self.sim_rows - 1):
-                for c in range(self.sim_cols - 1):
-                    # Check if contour crosses this cell
-                    vals = [
-                        elevation[r, c],
-                        elevation[r, c + 1],
-                        elevation[r + 1, c],
-                        elevation[r + 1, c + 1],
-                    ]
-                    crosses = (min(vals) <= threshold <= max(vals))
-                    if crosses:
-                        cx = int((c + 0.5) * self.cell_w)
-                        cy = int((r + 0.5) * self.cell_h)
-                        pygame.draw.circle(
-                            contour_surface, contour_color, (cx, cy), 1
-                        )
+        # Burned-out char (only where NOT actively burning)
+        no_burn = burn_hi < 0.05
+        overlay[:, :, 0] = np.where(no_burn, np.maximum(overlay[:, :, 0], (burned_hi * 40).astype(np.uint8)), overlay[:, :, 0])
+        overlay[:, :, 1] = np.where(no_burn, np.maximum(overlay[:, :, 1], (burned_hi * 35).astype(np.uint8)), overlay[:, :, 1])
+        overlay[:, :, 2] = np.where(no_burn, np.maximum(overlay[:, :, 2], (burned_hi * 30).astype(np.uint8)), overlay[:, :, 2])
+        overlay[:, :, 3] = np.where(no_burn, np.maximum(overlay[:, :, 3], (burned_hi * 160).astype(np.uint8)), overlay[:, :, 3])
 
-        self.terrain_surface.blit(contour_surface, (0, 0))
+        return overlay
 
-    def render_fire_state(self, fire_grid: np.ndarray, frame: int):
-        """Draw the fire overlay on top of terrain.
-
-        Args:
-            fire_grid: 2D int array (rows × cols) with states:
-                0 = unburned, 1 = burning, 2 = burned out
-            frame: Current frame number (for flickering animation).
-        """
-        self.fire_surface.fill((0, 0, 0, 0))  # clear transparent
-
+    def _fire_fallback(self, fire_grid):
+        """Simple fire overlay without cv2."""
+        h, w = self.height, self.width
+        overlay = np.zeros((h, w, 4), dtype=np.uint8)
         for r in range(self.sim_rows):
             for c in range(self.sim_cols):
                 state = int(fire_grid[r, c])
-
                 if state == 0:
-                    continue  # unburned = transparent
+                    continue
+                y1 = int(r * self.cell_h)
+                y2 = int((r + 1) * self.cell_h)
+                x1 = int(c * self.cell_w)
+                x2 = int((c + 1) * self.cell_w)
+                if state == 1:
+                    overlay[y1:y2, x1:x2] = [255, 100, 0, 200]
+                elif state == 2:
+                    overlay[y1:y2, x1:x2] = [40, 35, 30, 160]
+        return overlay
 
-                rect = pygame.Rect(
-                    int(c * self.cell_w),
-                    int(r * self.cell_h),
-                    int(self.cell_w) + 1,
-                    int(self.cell_h) + 1,
-                )
+    # ── Compositing ──────────────────────────────────────────
 
-                if state == 1:  # burning
-                    # Flickering fire color
-                    idx = (frame + r * 3 + c * 7) % len(config.COLOR_BURNING)
-                    color = config.COLOR_BURNING[idx]
-                    alpha = 200 + int(40 * math.sin(frame * 0.3 + r + c))
-                    alpha = max(160, min(255, alpha))
-                    pygame.draw.rect(
-                        self.fire_surface, (*color, alpha), rect
-                    )
+    def composite(self, terrain_rgb, fire_rgba=None, ignition_point=None, show_marker=False):
+        """Alpha-blend fire overlay onto terrain, optionally draw ignition marker.
 
-                elif state == 2:  # burned out
-                    pygame.draw.rect(
-                        self.fire_surface, (*config.COLOR_BURNED, 180), rect
-                    )
-
-    def render_ignition_marker(self, row: int, col: int):
-        """Draw a pulsing ignition marker at the given grid cell."""
-        cx = int((col + 0.5) * self.cell_w)
-        cy = int((row + 0.5) * self.cell_h)
-        radius = int(max(self.cell_w, self.cell_h) * 0.8)
-
-        # Draw crosshair
-        pygame.draw.circle(self.screen, (255, 255, 0), (cx, cy), radius, 2)
-        pygame.draw.line(
-            self.screen, (255, 255, 0),
-            (cx - radius, cy), (cx + radius, cy), 1
-        )
-        pygame.draw.line(
-            self.screen, (255, 255, 0),
-            (cx, cy - radius), (cx, cy + radius), 1
-        )
-
-    def render_wind_indicator(self, direction_deg: float, speed: float):
-        """Draw a wind direction arrow in the top-right corner.
-
-        Args:
-            direction_deg: Wind direction in compass degrees (0=N, 90=E, ...).
-            speed: Wind speed in km/h.
+        Returns:
+            np.ndarray of shape (height, width, 3) uint8 RGB.
         """
-        # Arrow center position (top-right corner)
-        cx = self.width - 60
-        cy = 60
-        arrow_len = 35
+        result = terrain_rgb.copy()
 
-        # Convert compass bearing to math angle (0° = up/north)
-        angle_rad = math.radians(direction_deg)
-        dx = arrow_len * math.sin(angle_rad)
-        dy = -arrow_len * math.cos(angle_rad)  # negative because y increases down
+        if fire_rgba is not None:
+            alpha = fire_rgba[:, :, 3:4].astype(np.float32) / 255.0
+            fire_rgb = fire_rgba[:, :, :3].astype(np.float32)
+            result = (result.astype(np.float32) * (1 - alpha) + fire_rgb * alpha).astype(np.uint8)
 
-        # Arrow tip
-        tip_x = cx + dx
-        tip_y = cy + dy
+        if show_marker and ignition_point is not None and HAS_CV2:
+            row, col = ignition_point
+            cx = int((col + 0.5) * self.cell_w)
+            cy = int((row + 0.5) * self.cell_h)
+            r = int(max(self.cell_w, self.cell_h))
+            cv2.circle(result, (cx, cy), r, (255, 255, 0), 2, cv2.LINE_AA)
+            cv2.line(result, (cx - r, cy), (cx + r, cy), (255, 255, 0), 1, cv2.LINE_AA)
+            cv2.line(result, (cx, cy - r), (cx, cy + r), (255, 255, 0), 1, cv2.LINE_AA)
 
-        # Arrow base
-        base_x = cx - dx * 0.3
-        base_y = cy - dy * 0.3
-
-        # Draw arrow
-        pygame.draw.line(
-            self.screen, config.COLOR_WIND_ARROW,
-            (int(base_x), int(base_y)), (int(tip_x), int(tip_y)), 3
-        )
-
-        # Arrowhead
-        head_len = 10
-        left_angle = angle_rad + math.radians(150)
-        right_angle = angle_rad - math.radians(150)
-
-        left_x = tip_x + head_len * math.sin(left_angle)
-        left_y = tip_y - head_len * math.cos(left_angle)
-        right_x = tip_x + head_len * math.sin(right_angle)
-        right_y = tip_y - head_len * math.cos(right_angle)
-
-        pygame.draw.polygon(
-            self.screen, config.COLOR_WIND_ARROW,
-            [(int(tip_x), int(tip_y)),
-             (int(left_x), int(left_y)),
-             (int(right_x), int(right_y))],
-        )
-
-        # Wind circle background
-        pygame.draw.circle(
-            self.screen, (40, 40, 60), (cx, cy), 50, 2
-        )
-
-        # Speed label
-        speed_text = self.font_small.render(f"{speed:.0f} km/h", True, config.COLOR_UI_TEXT)
-        self.screen.blit(speed_text, (cx - speed_text.get_width() // 2, cy + 42))
-
-        # "WIND" label
-        label = self.font_small.render("WIND", True, config.COLOR_UI_TEXT)
-        self.screen.blit(label, (cx - label.get_width() // 2, cy - 50))
-
-    def render_hud(self, weather_params: dict, time_step: int, sim_status: str = ""):
-        """Draw a HUD with current simulation info.
-
-        Args:
-            weather_params: Dict with current weather parameters.
-            time_step: Current simulation time step index.
-            sim_status: Status string to display.
-        """
-        y = 10
-        x = 10
-        line_height = 20
-
-        lines = [
-            f"Step: {time_step}",
-            f"Temp: {weather_params.get('TMP', '?')}°C",
-            f"RH: {weather_params.get('RH', '?')}%",
-        ]
-
-        if sim_status:
-            lines.append(sim_status)
-
-        # Background panel
-        panel_h = len(lines) * line_height + 10
-        panel = pygame.Surface((180, panel_h), pygame.SRCALPHA)
-        panel.fill((0, 0, 0, 120))
-        self.screen.blit(panel, (x - 5, y - 5))
-
-        for line in lines:
-            text_surf = self.font_small.render(line, True, config.COLOR_UI_TEXT)
-            self.screen.blit(text_surf, (x, y))
-            y += line_height
-
-    def render_controls_help(self):
-        """Draw controls help at the bottom of the screen."""
-        help_lines = [
-            "SPACE: Capture Terrain | Click: Ignite | Arrows: Wind Dir",
-            "+/-: Wind Speed | R: Reset | ESC: Quit",
-        ]
-        y = self.height - 40
-        for line in help_lines:
-            text_surf = self.font_small.render(line, True, (180, 180, 180))
-            self.screen.blit(
-                text_surf,
-                (self.width // 2 - text_surf.get_width() // 2, y),
-            )
-            y += 18
-
-    def update(
-        self,
-        fuel_grid: np.ndarray,
-        elevation: np.ndarray,
-        fire_grid: np.ndarray,
-        weather_params: dict,
-        frame: int,
-        time_step: int,
-        sim_status: str = "",
-        ignition_point: tuple = None,
-    ):
-        """Composite all layers and update the display.
-
-        Args:
-            fuel_grid: 2D int array with fuel types.
-            elevation: 2D float array with elevation.
-            fire_grid: 2D int array with fire states (or None if no fire).
-            weather_params: Current weather dict.
-            frame: Animation frame counter.
-            time_step: Simulation time step.
-            sim_status: Status string.
-            ignition_point: Optional (row, col) tuple for ignition marker.
-        """
-        # Layer 1: Terrain
-        self.render_terrain(fuel_grid, elevation)
-        self.screen.blit(self.terrain_surface, (0, 0))
-
-        # Layer 2: Fire overlay
-        if fire_grid is not None:
-            self.render_fire_state(fire_grid, frame)
-            self.screen.blit(self.fire_surface, (0, 0))
-
-        # Layer 3: Ignition marker
-        if ignition_point is not None:
-            self.render_ignition_marker(*ignition_point)
-
-        # Layer 4: Wind indicator
-        wind_deg = weather_params.get("WD", 270)
-        wind_spd = weather_params.get("WS", 20)
-        self.render_wind_indicator(wind_deg, wind_spd)
-
-        # Layer 5: HUD
-        self.render_hud(weather_params, time_step, sim_status)
-
-        # Layer 6: Controls help
-        self.render_controls_help()
-
-        pygame.display.flip()
-
-    def tick(self, fps: int = None):
-        """Cap the frame rate."""
-        self.clock.tick(fps or config.TARGET_FPS)
-
-    def cleanup(self):
-        """Shutdown Pygame."""
-        pygame.quit()
+        return result

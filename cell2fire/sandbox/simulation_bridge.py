@@ -265,3 +265,97 @@ class SimulationBridge:
                 shutil.rmtree(self.sim_data_dir)
             except Exception as e:
                 print(f"[SimulationBridge] Cleanup warning: {e}")
+
+    def precompute_and_save(
+        self,
+        depth_frame: np.ndarray,
+        ignition_row: int = None,
+        ignition_col: int = None,
+        weather_params: dict = None,
+        cache_path: str = None,
+    ) -> list:
+        """Run full pipeline: terrain → simulation → save fire grids to disk.
+
+        Args:
+            depth_frame: Raw depth frame from Kinect.
+            ignition_row: Row of the ignition point (default: config center).
+            ignition_col: Col of the ignition point (default: config center).
+            weather_params: Weather parameters (default: config defaults).
+            cache_path: Path to save the .npz cache (default: config path).
+
+        Returns:
+            List of fire grid arrays (same as run_simulation).
+        """
+        ig_row = ignition_row if ignition_row is not None else config.DEFAULT_IGNITION_ROW
+        ig_col = ignition_col if ignition_col is not None else config.DEFAULT_IGNITION_COL
+        cache = cache_path or config.PRECOMPUTED_CACHE_FILE
+
+        print(f"[SimulationBridge] Precomputing simulation from ignition ({ig_row}, {ig_col})...")
+
+        # Generate terrain files from the depth frame
+        result = self.prepare_terrain(depth_frame)
+
+        # Calculate 1-indexed cell ID (row-major order)
+        ignition_cell_id = ig_row * config.SIM_COLS + ig_col + 1
+
+        # Run the simulation
+        grids = self.run_simulation(
+            ignition_cells=[ignition_cell_id],
+            weather_params=weather_params,
+        )
+
+        if grids:
+            # Save to disk
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+
+            # Stack grids into a 3D array: (time_steps, rows, cols)
+            grids_array = np.stack(grids, axis=0)
+            np.savez_compressed(
+                cache,
+                grids=grids_array,
+                ignition_row=ig_row,
+                ignition_col=ig_col,
+                elevation=result["elevation"],
+                fuel=result["fuel"],
+            )
+            print(f"[SimulationBridge] Saved {len(grids)} fire grids to {cache}")
+        else:
+            print("[SimulationBridge] Precomputation produced no output.")
+
+        return grids
+
+    @staticmethod
+    def load_precomputed(cache_path: str = None) -> dict:
+        """Load precomputed fire grids from disk.
+
+        Args:
+            cache_path: Path to the .npz cache file.
+
+        Returns:
+            Dict with keys:
+                'grids': list of 2D numpy arrays (fire state per time step)
+                'ignition_row': int
+                'ignition_col': int
+                'elevation': 2D float array
+                'fuel': 2D int array
+            Returns None if cache not found.
+        """
+        cache = cache_path or config.PRECOMPUTED_CACHE_FILE
+
+        if not os.path.isfile(cache):
+            print(f"[SimulationBridge] No precomputed cache found at {cache}")
+            return None
+
+        data = np.load(cache, allow_pickle=False)
+        grids_3d = data["grids"]  # shape: (T, rows, cols)
+        grids = [grids_3d[t] for t in range(grids_3d.shape[0])]
+
+        print(f"[SimulationBridge] Loaded {len(grids)} precomputed fire grids from {cache}")
+
+        return {
+            "grids": grids,
+            "ignition_row": int(data["ignition_row"]),
+            "ignition_col": int(data["ignition_col"]),
+            "elevation": data["elevation"],
+            "fuel": data["fuel"],
+        }

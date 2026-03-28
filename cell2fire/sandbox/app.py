@@ -1,22 +1,20 @@
 # coding: utf-8
 """
-Main AR Sandbox application: integrates Kinect capture, terrain generation,
-Cell2Fire simulation, and Pygame projection rendering.
+Main AR Sandbox application using Pyglet (matching mcsandtable architecture).
+
+Integrates Kinect capture, terrain generation, Cell2Fire simulation,
+and Pyglet projection rendering with AR Sandbox-style hillshade terrain.
 
 Usage:
-    python -m cell2fire.sandbox.app
+    python -m cell2fire.sandbox
 """
 import os
 import sys
 import math
-import time
 import numpy as np
-
-try:
-    import pygame
-    HAS_PYGAME = True
-except ImportError:
-    HAS_PYGAME = False
+import pyglet
+import pyglet.event
+from pyglet.window import key, mouse
 
 from . import config
 from .kinect_capture import KinectCapture
@@ -25,330 +23,403 @@ from .simulation_bridge import SimulationBridge
 from .renderer import SandboxRenderer
 
 
-class SandboxApp:
-    """Main application class for the AR Sandbox fire simulation.
+class Cell2FireSandbox(pyglet.window.Window):
+    """Pyglet window for the Cell2Fire AR Sandbox projection system.
+
+    Mirrors the AR Sandbox (MCSandTable) architecture:
+    - Subclasses pyglet.window.Window
+    - on_draw renders the scene
+    - on_key_press handles input
+    - flip_canvas rotates for overhead projector
 
     Controls:
-        SPACE       — Capture terrain from Kinect (or fallback image)
-        Left Click  — Set ignition point at mouse position
+        SPACE       — Capture depth from Kinect (single snapshot)
+        F           — Precompute simulation → save to disk
+        P           — Play precomputed simulation from cache
+        Left Click  — Set ignition point (runs sim in real time)
         Arrow Keys  — Change wind direction
-        + / =       — Increase wind speed by 5 km/h
-        - / _       — Decrease wind speed by 5 km/h
-        R           — Reset simulation (clear fire, keep terrain)
-        T           — Re-capture terrain (reset everything)
+        EQUAL/MINUS — Adjust wind speed ±5 km/h
+        R           — Reset fire (keep terrain)
         ESC         — Quit
     """
 
-    def __init__(self):
-        if not HAS_PYGAME:
-            print("ERROR: pygame is required. Install with: pip install pygame")
-            sys.exit(1)
+    def __init__(self, force_windowed=True, fps=30, screen_id=0):
+        # Detect screens (handle pyglet API differences)
+        screens = []
+        try:
+            _canvas = __import__("pyglet.canvas", fromlist=["canvas"])
+            display = _canvas.get_display()
+            screens = display.get_screens()
+        except Exception:
+            pass
 
-        # Set Pygame window position before init
-        os.environ["SDL_VIDEO_WINDOW_POS"] = config.SDL_WINDOW_POS
+        if force_windowed or len(screens) <= 1:
+            super().__init__(
+                resizable=True,
+                width=config.PROJECTOR_WIDTH,
+                height=config.PROJECTOR_HEIGHT,
+                caption="Cell2Fire AR Sandbox",
+            )
+        else:
+            target = screens[min(screen_id, len(screens) - 1)]
+            super().__init__(screen=target, fullscreen=True)
 
-        # Initialize components
-        print("=" * 60)
-        print("  Cell2Fire AR Sandbox — Real-Time Fire Simulation")
-        print("=" * 60)
+        self.fps = fps
 
+        # ── Components ──
         self.kinect = KinectCapture()
         self.terrain_gen = TerrainGenerator()
         self.sim_bridge = SimulationBridge()
-        self.renderer = SandboxRenderer()
+        self.renderer = SandboxRenderer(self.width, self.height)
 
-        # State
-        self.running = True
+        # ── State ──
         self.frame = 0
         self.time_step = 0
 
-        # Terrain state
         self.terrain_captured = False
-        self.live_capture = False
         self.elevation = None
         self.fuel_grid = None
+        self._depth_frame = None
 
-        # Ignition state
-        self.ignition_point = None      # (row, col) in grid coords
-        self.ignition_cell_id = None    # 1-indexed cell number
+        self.ignition_point = None
+        self.ignition_cell_id = None
 
-        # Simulation state
         self.sim_running = False
-        self.fire_grids = []            # List of grid arrays from simulation
+        self.fire_grids = []
         self.current_fire_grid = None
         self.sim_status = "Press SPACE to capture terrain"
 
-        # Weather (modifiable at runtime)
         self.weather_params = config.DEFAULT_WEATHER.copy()
 
-        # Wind direction cycling
-        self._wind_dir_keys = list(config.WIND_DIRECTIONS.keys())
-        self._wind_dir_idx = self._wind_dir_keys.index("W")  # default W (270°)
+        # ── HUD Labels ──
+        self.fps_display = pyglet.window.FPSDisplay(window=self, color=(255, 0, 0, 255))
+        self.status_label = pyglet.text.Label(
+            "", font_name="Consolas", font_size=12,
+            x=10, y=self.height - 20, color=(255, 255, 255, 220),
+        )
+        self.step_label = pyglet.text.Label(
+            "", font_name="Consolas", font_size=12,
+            x=10, y=self.height - 40, color=(255, 255, 255, 220),
+        )
+        self.weather_label = pyglet.text.Label(
+            "", font_name="Consolas", font_size=12,
+            x=10, y=self.height - 60, color=(255, 255, 255, 220),
+        )
+        self.controls_label = pyglet.text.Label(
+            "SPACE:Capture | F:Precompute | P:Play | Click:Ignite | R:Reset | ESC:Quit",
+            font_name="Consolas", font_size=10,
+            x=self.width // 2, y=10, anchor_x="center",
+            color=(180, 180, 180, 200),
+        )
+        self.wind_label = pyglet.text.Label(
+            "WIND", font_name="Consolas", font_size=10,
+            x=self.width - 60, y=self.height - 10,
+            anchor_x="center", color=(200, 200, 255, 220),
+        )
+        self.wind_speed_label = pyglet.text.Label(
+            "", font_name="Consolas", font_size=10,
+            x=self.width - 60, y=self.height - 110,
+            anchor_x="center", color=(200, 200, 255, 220),
+        )
 
-        print("\nControls:")
-        print("  SPACE       — Capture terrain")
-        print("  Left Click  — Set ignition point")
-        print("  Arrow Keys  — Change wind direction")
-        print("  +/-         — Adjust wind speed")
-        print("  R           — Reset fire")
-        print("  ESC         — Quit\n")
+        # ── Projector flip ──
+        if self.fullscreen:
+            pyglet.clock.schedule_once(self.flip_canvas, delay=2)
 
-    def handle_events(self):
-        """Process Pygame events and update state accordingly."""
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
+        # Check for cached simulation
+        cached = SimulationBridge.load_precomputed()
+        if cached:
+            self.sim_status = "Cached simulation available — press P to play"
 
-            elif event.type == pygame.KEYDOWN:
-                self._handle_keydown(event.key)
+        print("=" * 60)
+        print("  Cell2Fire AR Sandbox — Pyglet Projection System")
+        print("=" * 60)
+        print("\n  SPACE=Capture  F=Precompute  P=Play  Click=Ignite")
+        print("  Arrows=Wind Dir  +/-=Speed  R=Reset  ESC=Quit\n")
 
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left click
-                    self._handle_click(event.pos)
+    # ── Canvas Flip (same as AR Sandbox) ────────────────────
 
-    def _handle_keydown(self, key):
-        """Handle keyboard input."""
-        if key == pygame.K_ESCAPE:
-            self.running = False
+    def flip_canvas(self, _=None):
+        """Rotate 180° for overhead projector (identical to MCSandTable)."""
+        from pyglet.math import Mat4, Vec3
+        ortho = Mat4.orthogonal_projection(0, self.width, 0, self.height, -255, 255)
+        translate = Mat4.from_translation(Vec3(self.width, self.height, 0))
+        rotate = Mat4.from_rotation(3.14, Vec3(0, 0, 1))
+        self.projection = ortho @ translate @ rotate
 
-        elif key == pygame.K_SPACE:
-            self.live_capture = not self.live_capture
-            if self.live_capture:
-                self.sim_status = "Live Capture ON — Press SPACE to pause"
-            else:
-                self.sim_status = "Live Capture PAUSED — Press SPACE to resume"
+    # ── Numpy → Pyglet (same pattern as MCSandTable.create_pyglet_img) ──
 
-        elif key == pygame.K_r:
-            self._reset_simulation()
+    @staticmethod
+    def numpy_to_pyglet(img):
+        """Convert numpy HxWx3 RGB array to pyglet ImageData."""
+        img = np.ascontiguousarray(np.flipud(img))
+        h, w, nc = img.shape
+        fmt = "RGBA" if nc == 4 else "RGB"
+        raw = np.ctypeslib.as_ctypes(img.ravel().astype(np.uint8))
+        return pyglet.image.ImageData(w, h, fmt, raw, pitch=w * nc)
 
-        elif key == pygame.K_t:
+    # ── Input Events ────────────────────────────────────────
+
+    def on_key_press(self, symbol, modifiers):
+        if symbol == key.ESCAPE:
+            self._cleanup()
+            self.close()
+        elif symbol == key.SPACE:
             self._capture_terrain()
-
-        # Wind direction
-        elif key == pygame.K_UP:
+        elif symbol == key.F:
+            self._precompute_simulation()
+        elif symbol == key.P:
+            self._play_precomputed()
+        elif symbol == key.R:
+            self._reset_simulation()
+        elif symbol == key.T:
+            self._capture_terrain()
+        elif symbol == key.UP:
             self._set_wind_direction("N")
-        elif key == pygame.K_DOWN:
+        elif symbol == key.DOWN:
             self._set_wind_direction("S")
-        elif key == pygame.K_LEFT:
+        elif symbol == key.LEFT:
             self._set_wind_direction("W")
-        elif key == pygame.K_RIGHT:
+        elif symbol == key.RIGHT:
             self._set_wind_direction("E")
-
-        # Wind speed
-        elif key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
+        elif symbol in (key.EQUAL, key.NUM_ADD):
             self._adjust_wind_speed(5)
-        elif key in (pygame.K_MINUS, pygame.K_UNDERSCORE, pygame.K_KP_MINUS):
+        elif symbol in (key.MINUS, key.NUM_SUBTRACT):
             self._adjust_wind_speed(-5)
 
-    def _handle_click(self, pos):
-        """Handle mouse click — set ignition point."""
-        if not self.terrain_captured:
-            self.sim_status = "Capture terrain first (SPACE)"
+    def on_mouse_press(self, x, y, button, modifiers):
+        if button != mouse.LEFT or not self.terrain_captured:
+            if not self.terrain_captured:
+                self.sim_status = "Capture terrain first (SPACE)"
             return
 
-        x, y = pos
+        # pyglet y=0 at bottom → flip to grid row (top=0)
         col = int(x / self.renderer.cell_w)
-        row = int(y / self.renderer.cell_h)
-
-        # Clamp to grid bounds
+        row = int((self.height - y) / self.renderer.cell_h)
         row = max(0, min(row, config.SIM_ROWS - 1))
         col = max(0, min(col, config.SIM_COLS - 1))
 
-        # Check if cell is burnable
         fuel_val = int(self.fuel_grid[row, col])
-        non_burnable = {101, 102, 100, 103, 104, 105}
-        if fuel_val in non_burnable:
+        if fuel_val in {100, 101, 102, 103, 104, 105}:
             self.sim_status = "Cannot ignite non-fuel cell"
             return
 
-        # Set ignition point (1-indexed, row-major)
         self.ignition_point = (row, col)
         self.ignition_cell_id = row * config.SIM_COLS + col + 1
+        self.sim_status = f"Running simulation from ({row}, {col})..."
+        print(f"[App] Ignition at ({row}, {col}), cell ID={self.ignition_cell_id}")
 
-        self.sim_status = f"Ignition set at ({row}, {col}). Running simulation..."
-        print(f"[App] Ignition at grid ({row}, {col}), cell ID = {self.ignition_cell_id}")
-
-        # Stop live capture and commit the terrain for simulation
-        self.live_capture = False
-        self.sim_status = "Committing terrain geometry and running Cell2Fire..."
-        self._render_frame()
-
-        # Capture definitive full terrain files
-        depth_frame = self.kinect.get_depth_frame()
-        if depth_frame is not None:
-            self.sim_bridge.prepare_terrain(depth_frame)
-        else:
-            print("[App] WARNING: Could not get depth frame for final terrain generation.")
-
-        # Run the simulation
+        if self._depth_frame is not None:
+            self.sim_bridge.prepare_terrain(self._depth_frame)
         self._run_simulation()
 
-    def _capture_terrain(self):
-        """Capture depth from Kinect and generate terrain."""
-        self.sim_status = "Capturing terrain..."
-        print("[App] Capturing terrain from Kinect...")
+    # ── Rendering (on_draw, same pattern as MCSandTable) ────
 
-        depth_frame = self.kinect.get_depth_frame()
-        if depth_frame is None:
+    def on_draw(self):
+        self.clear()
+
+        if self.terrain_captured and self.elevation is not None:
+            # Advance fire animation
+            self._advance_fire()
+
+            # Generate images
+            terrain = self.renderer.generate_terrain_image(self.elevation, self.fuel_grid)
+            fire = None
+            if self.current_fire_grid is not None:
+                fire = self.renderer.generate_fire_overlay(self.current_fire_grid, self.frame)
+
+            show_marker = self.ignition_point is not None and not self.sim_running
+            final = self.renderer.composite(terrain, fire, self.ignition_point, show_marker)
+
+            # Convert to pyglet and blit (same as MCSandTable)
+            pimg = self.numpy_to_pyglet(final)
+            pimg.blit(0, 0, width=self.width, height=self.height)
+
+        # HUD
+        self._draw_hud()
+        self._draw_wind_indicator()
+        self.fps_display.draw()
+        self.frame += 1
+
+    def _draw_hud(self):
+        """Draw HUD labels."""
+        wp = self.weather_params
+        self.status_label.text = self.sim_status
+        self.step_label.text = f"Step: {self.time_step}"
+        self.weather_label.text = f"T:{wp['TMP']}°C  RH:{wp['RH']}%"
+        self.status_label.draw()
+        self.step_label.draw()
+        self.weather_label.draw()
+        self.controls_label.draw()
+
+    def _draw_wind_indicator(self):
+        """Draw wind arrow in top-right corner using pyglet shapes."""
+        cx = self.width - 60
+        cy = self.height - 60
+        wp = self.weather_params
+        direction_deg = wp.get("WD", 270)
+        speed = wp.get("WS", 20)
+
+        # Circle outline
+        circle = pyglet.shapes.Arc(cx, cy, 40, color=(60, 60, 80))
+        circle.draw()
+
+        # Arrow
+        angle_rad = math.radians(direction_deg)
+        arrow_len = 30
+        dx = arrow_len * math.sin(angle_rad)
+        dy = arrow_len * math.cos(angle_rad)  # pyglet y-up matches compass
+
+        line = pyglet.shapes.Line(
+            cx - dx * 0.3, cy - dy * 0.3, cx + dx, cy + dy,
+            thickness=3, color=(200, 200, 255),
+        )
+        line.draw()
+
+        # Arrowhead
+        head_len = 10
+        la = angle_rad + math.radians(150)
+        ra = angle_rad - math.radians(150)
+        tri = pyglet.shapes.Triangle(
+            cx + dx, cy + dy,
+            cx + dx + head_len * math.sin(la), cy + dy + head_len * math.cos(la),
+            cx + dx + head_len * math.sin(ra), cy + dy + head_len * math.cos(ra),
+            color=(200, 200, 255),
+        )
+        tri.draw()
+
+        # Labels
+        self.wind_label.draw()
+        self.wind_speed_label.text = f"{speed:.0f} km/h"
+        self.wind_speed_label.draw()
+
+    # ── Simulation Logic ────────────────────────────────────
+
+    def _capture_terrain(self):
+        self.sim_status = "Capturing terrain..."
+        print("[App] Capturing terrain...")
+        depth = self.kinect.get_depth_frame()
+        if depth is None:
             self.sim_status = "Failed to capture depth frame"
             return
-
-        # Generate terrain files
-        result = self.sim_bridge.prepare_terrain(depth_frame)
-
+        self._depth_frame = depth.copy()
+        result = self.sim_bridge.prepare_terrain(depth)
         self.elevation = result["elevation"]
         self.fuel_grid = result["fuel"]
         self.terrain_captured = True
-
-        # Reset simulation state
         self._reset_simulation()
+        self.sim_status = "Terrain captured. Click to ignite or F to precompute."
+        print("[App] Terrain captured.")
 
-        self.sim_status = "Terrain captured. Click to set ignition point."
-        print("[App] Terrain captured and processed.")
+    def _precompute_simulation(self):
+        if not self.terrain_captured or self._depth_frame is None:
+            self.sim_status = "Capture terrain first (SPACE)"
+            return
+        r, c = config.DEFAULT_IGNITION_ROW, config.DEFAULT_IGNITION_COL
+        self.sim_status = f"Precomputing from ({r}, {c})..."
+        print(f"[App] Precomputing from ({r}, {c})...")
+        grids = self.sim_bridge.precompute_and_save(
+            self._depth_frame, r, c, self.weather_params,
+        )
+        if grids:
+            self.sim_status = f"Precomputed! {len(grids)} steps. Press P to play."
+        else:
+            self.sim_status = "Precomputation failed."
+
+    def _play_precomputed(self):
+        cached = SimulationBridge.load_precomputed()
+        if cached is None:
+            self.sim_status = "No cache. SPACE then F first."
+            return
+        self.fire_grids = cached["grids"]
+        self.ignition_point = (cached["ignition_row"], cached["ignition_col"])
+        self.ignition_cell_id = cached["ignition_row"] * config.SIM_COLS + cached["ignition_col"] + 1
+        self.elevation = cached["elevation"]
+        self.fuel_grid = cached["fuel"]
+        self.terrain_captured = True
+        self.time_step = 0
+        self.sim_running = True
+        self.current_fire_grid = None
+        self.sim_status = f"Playing — {len(self.fire_grids)} steps"
+        print(f"[App] Playing cached simulation ({len(self.fire_grids)} steps)")
 
     def _run_simulation(self):
-        """Execute Cell2Fire simulation with current terrain and ignition."""
         if self.ignition_cell_id is None:
             return
-
-        self.sim_status = "Running Cell2Fire simulation..."
         self.sim_running = False
         self.fire_grids = []
         self.time_step = 0
         self.current_fire_grid = None
-
-        # Force display update to show status
-        self._render_frame()
-
-        # Run simulation
         grids = self.sim_bridge.run_simulation(
             ignition_cells=[self.ignition_cell_id],
             weather_params=self.weather_params,
         )
-
         if grids:
             self.fire_grids = grids
             self.sim_running = True
-            self.time_step = 0
-            self.sim_status = f"Simulating — {len(grids)} time steps"
-            print(f"[App] Simulation complete: {len(grids)} time steps")
+            self.sim_status = f"Simulating — {len(grids)} steps"
+            print(f"[App] Simulation complete: {len(grids)} steps")
         else:
-            self.sim_status = "Simulation produced no output. Check C++ build."
-            print("[App] WARNING: No grid outputs from simulation.")
+            self.sim_status = "Simulation failed. Check C++ build."
 
     def _reset_simulation(self):
-        """Reset fire state, keep terrain."""
         self.sim_running = False
         self.fire_grids = []
         self.current_fire_grid = None
         self.ignition_point = None
         self.ignition_cell_id = None
         self.time_step = 0
-
         if self.terrain_captured:
-            self.sim_status = "Fire reset. Click to set new ignition."
+            self.sim_status = "Click to ignite, F to precompute, P to play."
         else:
             self.sim_status = "Press SPACE to capture terrain"
 
-    def _set_wind_direction(self, direction: str):
-        """Update wind direction."""
+    def _set_wind_direction(self, direction):
         if direction in config.WIND_DIRECTIONS:
             self.weather_params["WD"] = config.WIND_DIRECTIONS[direction]
-            self.sim_status = f"Wind direction: {direction} ({self.weather_params['WD']}°)"
-            print(f"[App] Wind direction set to {direction}")
-
-            # Re-run simulation if fire was active
-            if self.ignition_cell_id is not None and self.terrain_captured:
+            self.sim_status = f"Wind: {direction} ({self.weather_params['WD']}°)"
+            if self.ignition_cell_id and self.terrain_captured:
                 self._run_simulation()
 
-    def _adjust_wind_speed(self, delta: float):
-        """Adjust wind speed by delta km/h."""
-        current = self.weather_params.get("WS", 20)
-        new_speed = max(0, min(100, current + delta))
-        self.weather_params["WS"] = new_speed
-        self.sim_status = f"Wind speed: {new_speed} km/h"
-        print(f"[App] Wind speed set to {new_speed} km/h")
-
-        # Re-run simulation if fire was active
-        if self.ignition_cell_id is not None and self.terrain_captured:
+    def _adjust_wind_speed(self, delta):
+        ws = max(0, min(100, self.weather_params.get("WS", 20) + delta))
+        self.weather_params["WS"] = ws
+        self.sim_status = f"Wind speed: {ws} km/h"
+        if self.ignition_cell_id and self.terrain_captured:
             self._run_simulation()
 
-    def _update_fire_animation(self):
-        """Advance the fire animation to the next time step."""
+    def _advance_fire(self):
         if not self.sim_running or not self.fire_grids:
             return
-
-        # Cycle through time steps (loop the animation)
         if self.time_step < len(self.fire_grids):
             self.current_fire_grid = self.fire_grids[self.time_step]
-
-            # Advance every few frames for smooth visualization
-            if self.frame % 5 == 0:  # advance sim step every 5 render frames
+            if self.frame % 5 == 0:
                 self.time_step += 1
         else:
-            # Hold on the last frame
             self.current_fire_grid = self.fire_grids[-1]
-            self.sim_status = f"Simulation complete — {len(self.fire_grids)} steps"
+            self.sim_status = f"Complete — {len(self.fire_grids)} steps"
 
-    def _render_frame(self):
-        """Render the current state to the display."""
-        if self.terrain_captured and self.fuel_grid is not None:
-            self.renderer.update(
-                fuel_grid=self.fuel_grid,
-                elevation=self.elevation,
-                fire_grid=self.current_fire_grid,
-                weather_params=self.weather_params,
-                frame=self.frame,
-                time_step=self.time_step,
-                sim_status=self.sim_status,
-                ignition_point=self.ignition_point if not self.sim_running else None,
-            )
-        else:
-            # No terrain yet — show welcome screen
-            self.renderer.screen.fill(config.COLOR_BACKGROUND)
-            self.renderer.render_hud(self.weather_params, 0, self.sim_status)
-            self.renderer.render_controls_help()
-            pygame.display.flip()
+    # ── Lifecycle ───────────────────────────────────────────
 
-    def run(self):
-        """Main application loop."""
-        print("[App] Starting main loop...")
+    def on_resize(self, width, height):
+        if self.fullscreen:
+            self.flip_canvas()
+            return pyglet.event.EVENT_HANDLED
+        return super().on_resize(width, height)
 
-        try:
-            while self.running:
-                self.handle_events()
-                
-                # Continuous live capture
-                if self.live_capture and not self.sim_running and self.ignition_point is None:
-                    depth_frame = self.kinect.get_depth_frame()
-                    if depth_frame is not None:
-                        result = self.terrain_gen.generate_preview(depth_frame)
-                        self.elevation = result["elevation"]
-                        self.fuel_grid = result["fuel"]
-                        self.terrain_captured = True
-
-                self._update_fire_animation()
-                self._render_frame()
-                self.renderer.tick()
-                self.frame += 1
-
-        except KeyboardInterrupt:
-            print("\n[App] Interrupted by user.")
-        finally:
-            self.cleanup()
-
-    def cleanup(self):
-        """Release all resources."""
+    def _cleanup(self):
         print("[App] Shutting down...")
         self.kinect.cleanup()
         self.sim_bridge.cleanup_all()
-        self.renderer.cleanup()
         print("[App] Goodbye.")
+
+    def run(self):
+        pyglet.app.run(1 / self.fps)
 
 
 def main():
     """Entry point for the AR Sandbox application."""
-    app = SandboxApp()
+    app = Cell2FireSandbox(force_windowed=True, fps=30, screen_id=0)
     app.run()
 
 

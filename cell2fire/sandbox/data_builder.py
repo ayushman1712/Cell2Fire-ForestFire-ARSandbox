@@ -30,7 +30,7 @@ def generate_weather_csv(output_dir: str, weather_params: dict = None) -> str:
     rows = []
     # Generate multiple hours of identical weather to allow multi-period sims
     base_dt = wp.get("datetime", "2024-07-15 13:00")
-    for hour_offset in range(8):
+    for hour_offset in range(48):
         # Parse base hour and offset
         dt_parts = base_dt.split(" ")
         date_part = dt_parts[0]
