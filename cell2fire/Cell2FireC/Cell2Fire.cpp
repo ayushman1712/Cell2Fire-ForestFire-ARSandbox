@@ -458,18 +458,26 @@ void Cell2Fire::reset(int rnumber, double rnumber2){
 	// Initial status grid folder
 	if(this->args.OutputGrids){
 		CSVWriter CSVFolder("","");
+#ifdef _WIN32
+		this->gridFolder = "mkdir \"" + this->args.OutFolder + "Grids\" 2>nul & mkdir \"" + this->args.OutFolder + "Grids\\Grids" + std::to_string(this->sim) + "\" 2>nul";
+#else
 		this->gridFolder = "mkdir -p " + this->args.OutFolder + "/Grids/Grids" + std::to_string(this->sim);
+#endif
 		CSVFolder.MakeDir(this->gridFolder);
-		this->gridFolder = this->args.OutFolder + "/Grids/Grids" + std::to_string(this->sim) + "/";
+		this->gridFolder = this->args.OutFolder + "Grids/Grids" + std::to_string(this->sim) + "/";
 		//DEBUGstd::cout << "\nInitial Grid folder was generated in " << this->gridFolder << std::endl;
 	}
 	
 	// Messages Folder
 	if(this->args.OutMessages){
 		CSVWriter CSVFolder("","");
+#ifdef _WIN32
+		this->messagesFolder = "mkdir \"" + this->args.OutFolder + "Messages\" 2>nul";
+#else
 		this->messagesFolder = "mkdir -p " + this->args.OutFolder + "/Messages/";
+#endif
 		CSVFolder.MakeDir(this->messagesFolder);
-		this->messagesFolder = this->args.OutFolder + "/Messages/";
+		this->messagesFolder = this->args.OutFolder + "Messages/";
 	}
 		
 	// Random Weather 

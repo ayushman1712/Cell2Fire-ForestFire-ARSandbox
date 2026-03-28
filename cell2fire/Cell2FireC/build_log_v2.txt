@@ -1,0 +1,7 @@
+g++ -c -std=c++11 -O3 -Ieigen3 CellsFBP.cpp
+CellsFBP.cpp: In member function 'void CellsFBP::initializeFireFields(std::vector<std::vector<int> >&, std::unordered_set<int>&)':
+CellsFBP.cpp:119:41: error: 'M_PI' was not declared in this scope
+                 double radToDeg = 180 / M_PI;
+                                         ^~~~
+Makefile:46: recipe for target 'CellsFBP.o' failed
+mingw32-make: *** [CellsFBP.o] Error 1

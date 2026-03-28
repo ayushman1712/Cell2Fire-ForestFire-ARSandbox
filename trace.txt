@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "D:\BTP\Cell2FireMksh\Cell2Fire\test_kinect.py", line 5, in <module>
+    from pykinect2 import PyKinectV2
+  File "C:\Users\Ambuj\miniconda3\Lib\site-packages\pykinect2\PyKinectV2.py", line 2863, in <module>
+    from comtypes import _check_version; _check_version('')
+                                         ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ambuj\miniconda3\Lib\site-packages\comtypes\__init__.py", line 34, in _check_version
+    raise ImportError("Wrong version")
+ImportError: Wrong version

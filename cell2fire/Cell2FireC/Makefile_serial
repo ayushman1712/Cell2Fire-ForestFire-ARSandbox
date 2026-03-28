@@ -3,8 +3,8 @@ EIGENDIR     = /usr/include/eigen3/
 CC = g++
 MPCC = g++
 OPENMP = -openmp
-CFLAGS = -std=c++11 -O3 -I$(EIGENDIR)
-LIBS = -m64 -fPIC -fno-strict-aliasing -fexceptions -DNDEBUG -DIL_STD -lm -lpthread -ldl
+CFLAGS = -std=c++11 -O3 -I$(EIGENDIR) -D_USE_MATH_DEFINES
+LIBS = -fno-strict-aliasing -fexceptions -DNDEBUG -DIL_STD -lm -static-libgcc -static-libstdc++ -static
 
 TARGETS = Cell2Fire
 
