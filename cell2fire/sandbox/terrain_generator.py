@@ -63,8 +63,13 @@ class TerrainGenerator:
         # Invert: lower depth value = closer to sensor = higher elevation
         crop_norm = 1.0 - crop_norm
 
-        # Flip vertically so the sandbox orientation matches the simulation
-        crop_norm = np.flipud(crop_norm)
+        # Mirror vertically (top-to-bottom) if the physical projector setup requires it
+        if getattr(config, "MIRROR_KINECT_Y", True):
+            crop_norm = np.flipud(crop_norm)
+
+        # Mirror horizontally (left-to-right) if the physical projector setup is flipped
+        if getattr(config, "MIRROR_KINECT_X", False):
+            crop_norm = np.fliplr(crop_norm)
 
         # Resize to simulation grid
         heightmap = cv2.resize(
