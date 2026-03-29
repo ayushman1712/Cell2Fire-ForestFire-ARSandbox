@@ -18,19 +18,21 @@ CELL_SIZE_METERS = 50.0          # Physical size of each cell in meters (for FBP
 # ═══════════════════════════════════════════════════════════
 KINECT_FRAME_WIDTH = 512         # Kinect v2 depth frame width
 KINECT_FRAME_HEIGHT = 424        # Kinect v2 depth frame height
+MIRROR_KINECT_X = True           # Set to True to flip the Kinect input left-to-right (Horizontal)
+MIRROR_KINECT_Y = False           # Set to True to flip the Kinect input top-to-bottom (Vertical)
 
 # Region of Interest (crop rectangle) within the Kinect depth frame
 # Adjust these to match your sandbox's physical footprint in the Kinect's view
 KINECT_ROI = {
-    "x1": 72,
-    "y1": 125,
-    "x2": 462,
-    "y2": 345,
+    "x1": 95,
+    "y1": 112,
+    "x2": 419,
+    "y2": 314,
 }
 
 # Depth clamp range in millimeters
 # Objects closer than DEPTH_MIN_MM or farther than DEPTH_MAX_MM are clipped
-DEPTH_MIN_MM = 960
+DEPTH_MIN_MM = 940
 DEPTH_MAX_MM = 1030
 
 # ═══════════════════════════════════════════════════════════
@@ -38,24 +40,43 @@ DEPTH_MAX_MM = 1030
 # ═══════════════════════════════════════════════════════════
 # The normalized depth (0..1) is scaled to this elevation range (meters)
 # This simulates realistic wildland terrain for the FBP model
-ELEVATION_MIN_M = 1800.0
-ELEVATION_MAX_M = 2400.0
+ELEVATION_MIN_M = 860.0
+ELEVATION_MAX_M = 1025.0
 
 # ═══════════════════════════════════════════════════════════
 # Fuel Type Classification (FBP lookup grid_value codes)
 # ═══════════════════════════════════════════════════════════
 # Elevation bands (percentile-based) mapped to FBP fuel type grid codes
 # See fbp_lookup_table.csv for the full list
+
+# --- ORIGINAL CANADIAN/BOREAL BIOMES (COMMENTED OUT) ---
+# FUEL_BANDS = [
+#     # (percentile_upper, grid_value, description)
+#     (0.20, 102, "Water / Non-fuel"),          # Lowest 10% = water
+#     (0.35, 31,  "O1a - Matted Grass"),        # 10-35% = grassland
+#     (0.70, 2,   "C2 - Boreal Spruce"),        # 35-70% = conifer forest
+#     (0.90, 3,   "C3 - Mature Jack Pine"),     # 70-90% = dense conifer
+#     (1.00, 101, "Non-fuel (alpine rock)"),    # Top 10% = non-burnable alpine
+# ]
+
+# --- INDIAN FOREST BIOMES ---
+# Note: The cell2fire engine requires valid FBP grid_values (like 2, 3, 31) for fire physics.
+# We are repurposing those physics values to visually and thematically represent an Indian landscape.
+# FUEL_BANDS = [
+#     (0.15, 102, "River Water"),                           # Lowest 15% = Rivers
+#     (0.35, 31,  "Tropical Scrub / Savannah (Dry Grass)"), # 15-35% = Scrubland
+#     (0.70, 2,   "Tropical Dry Deciduous Forest"),         # 35-70% = Dry Deciduous
+#     (0.90, 3,   "Tropical Moist Deciduous (Teak/Sal)"),   # 70-90% = Dense Jungle
+#     (1.00, 101, "Deccan Laterite Rock Outcrops"),         # Top 10% = Red rocky hills
+# ]
 FUEL_BANDS = [
-    # (percentile_upper, grid_value, description)
-    (0.10, 102, "Water / Non-fuel"),          # Lowest 10% = water
-    (0.35, 31,  "O1a - Matted Grass"),        # 10-35% = grassland
-    (0.70, 2,   "C2 - Boreal Spruce"),        # 35-70% = conifer forest
-    (0.90, 3,   "C3 - Mature Jack Pine"),     # 70-90% = dense conifer
-    (1.00, 101, "Non-fuel (alpine rock)"),     # Top 10% = non-burnable alpine
+    (0.15, 102, "River Water"),                           # Lowest 15% = Rivers
+    (0.35, 31,  "Tropical Scrub / Savannah (Dry Grass)"), # 15-35% = Scrubland
+    (0.70, 2,   "Tropical Dry Deciduous Forest"),         # 35-70% = Dry Deciduous
+    (1.00, 3,   "Tropical Moist Deciduous (Teak/Sal)"),   # 70-90% = Dense Jungle
 ]
 
-DEFAULT_FUEL_TYPE = 2  # C2 Boreal Spruce (fallback)
+DEFAULT_FUEL_TYPE = 2  # Tropical Dry Deciduous (fallback)
 
 # ═══════════════════════════════════════════════════════════
 # Cell2Fire Simulation Parameters
@@ -116,16 +137,24 @@ TARGET_FPS = 30
 # ═══════════════════════════════════════════════════════════
 # Colors (RGB tuples)
 # ═══════════════════════════════════════════════════════════
-COLOR_WATER = (30, 100, 180)
-COLOR_GRASS = (120, 180, 60)
-COLOR_CONIFER = (34, 100, 34)
-COLOR_DENSE_CONIFER = (20, 70, 20)
-COLOR_ALPINE = (160, 160, 160)
-COLOR_BURNING = [(255, 80, 0), (255, 140, 0), (255, 200, 40), (255, 60, 0)]
-COLOR_BURNED = (40, 40, 40)
+# --- ORIGINAL VIBRANT COLORS (COMMENTED OUT) ---
+# COLOR_WATER = (15, 120, 255)         # Vibrant deep blue
+# COLOR_GRASS = (100, 210, 50)         # Bright lush green
+# COLOR_CONIFER = (15, 130, 30)        # Rich emerald green
+# COLOR_DENSE_CONIFER = (0, 75, 15)    # Very dark pure moss green
+# COLOR_ALPINE = (105, 75, 50)         # Rocky mountain earth brown
+
+# --- INDIAN FOREST COLORS ---
+COLOR_WATER = (0, 140, 220)          # Tropical teal river water
+COLOR_GRASS = (180, 200, 60)         # Golden/Yellow-green Savannah scrub
+COLOR_CONIFER = (90, 150, 40)        # Warm olive green for Dry Deciduous
+COLOR_DENSE_CONIFER = (20, 90, 30)   # Deep dark jungle green for Moist Deciduous (Teak/Sal)
+COLOR_ALPINE = (220, 150, 80)        # Bright baked sandy Laterite (Deccan rocks)
+COLOR_BURNING = [(255, 30, 0), (255, 120, 0), (255, 230, 0), (255, 0, 0)] # More intense fire
+COLOR_BURNED = (20, 20, 20)          # Darker charcoal for higher contrast
 COLOR_BACKGROUND = (0, 0, 0)
 COLOR_UI_TEXT = (255, 255, 255)
-COLOR_WIND_ARROW = (200, 200, 255)
+COLOR_WIND_ARROW = (150, 200, 255)
 
 # Map fuel grid_values to display colors
 FUEL_COLORS = {

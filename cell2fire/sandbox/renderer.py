@@ -13,7 +13,7 @@ except ImportError:
     HAS_CV2 = False
 
 try:
-    from matplotlib.colors import LightSource
+    from matplotlib.colors import LightSource, LinearSegmentedColormap
     import matplotlib.pyplot as plt
     HAS_MATPLOTLIB = True
 except ImportError:
@@ -42,8 +42,15 @@ class SandboxRenderer:
                 azdeg=config.HILLSHADE_AZIMUTH,
                 altdeg=config.HILLSHADE_ALTITUDE,
             )
+            # Build a custom colormap exactly matching config.py biomes!
+            colors = []
+            for upper_pct, grid_val, _ in config.FUEL_BANDS:
+                r, g, b = config.FUEL_COLORS[grid_val]
+                colors.append((r / 255.0, g / 255.0, b / 255.0))
+            self.custom_cmap = LinearSegmentedColormap.from_list("custom_biomes", colors)
         else:
             self.lightsource = None
+            self.custom_cmap = None
 
         self._cached_terrain = None
         self._cached_hash = None
@@ -66,7 +73,7 @@ class SandboxRenderer:
                 interpolation=cv2.INTER_CUBIC,
             )
             rgba = self.lightsource.shade(
-                elev_hires, cmap=plt.cm.gist_earth,
+                elev_hires, cmap=self.custom_cmap,
                 vert_exag=config.HILLSHADE_VERT_EXAG,
                 blend_mode=config.HILLSHADE_BLEND_MODE,
                 dx=1, dy=1,
@@ -126,13 +133,13 @@ class SandboxRenderer:
         burning = (fire_grid == 1).astype(np.float32)
         burned = (fire_grid == 2).astype(np.float32)
 
-        # Upscale with smooth interpolation + Gaussian blur
+        # Upscale with smooth interpolation + Gaussian blur (Linear prevents ringing artifacts)
         ks = max(int(self.cell_w * 0.8) | 1, 3)
         burn_hi = np.clip(cv2.GaussianBlur(
-            cv2.resize(burning, (self.width, self.height), interpolation=cv2.INTER_CUBIC),
+            cv2.resize(burning, (self.width, self.height), interpolation=cv2.INTER_LINEAR),
             (ks, ks), 0), 0, 1)
         burned_hi = np.clip(cv2.GaussianBlur(
-            cv2.resize(burned, (self.width, self.height), interpolation=cv2.INTER_CUBIC),
+            cv2.resize(burned, (self.width, self.height), interpolation=cv2.INTER_LINEAR),
             (ks, ks), 0), 0, 1)
 
         overlay = np.zeros((self.height, self.width, 4), dtype=np.uint8)
@@ -147,18 +154,36 @@ class SandboxRenderer:
             + 0.5, 0, 1
         )
 
-        intensity = burn_hi * noise
-        overlay[:, :, 0] = (intensity * 255).astype(np.uint8)
-        overlay[:, :, 1] = (intensity * 120 * noise).astype(np.uint8)
-        overlay[:, :, 2] = (intensity * 20).astype(np.uint8)
-        overlay[:, :, 3] = (burn_hi * 220).astype(np.uint8)
+        r_f, g_f, b_f = config.COLOR_BURNING[0]   # Base dark flame
+        r_c, g_c, b_c = config.COLOR_BURNING[2]   # Bright core flame
+        r_b, g_b, b_b = getattr(config, 'COLOR_BURNED', (20, 20, 20)) # Burned charcoal
 
-        # Burned-out char (only where NOT actively burning)
-        no_burn = burn_hi < 0.05
-        overlay[:, :, 0] = np.where(no_burn, np.maximum(overlay[:, :, 0], (burned_hi * 40).astype(np.uint8)), overlay[:, :, 0])
-        overlay[:, :, 1] = np.where(no_burn, np.maximum(overlay[:, :, 1], (burned_hi * 35).astype(np.uint8)), overlay[:, :, 1])
-        overlay[:, :, 2] = np.where(no_burn, np.maximum(overlay[:, :, 2], (burned_hi * 30).astype(np.uint8)), overlay[:, :, 2])
-        overlay[:, :, 3] = np.where(no_burn, np.maximum(overlay[:, :, 3], (burned_hi * 160).astype(np.uint8)), overlay[:, :, 3])
+        # Calculate floating-point colors and alphas
+        fire_r = (r_f + (r_c - r_f) * noise).astype(np.float32)
+        fire_g = (g_f + (g_c - g_f) * noise).astype(np.float32)
+        fire_b = (b_f + (b_c - b_f) * noise).astype(np.float32)
+        fire_a = np.clip(burn_hi * 255.0, 0, 255).astype(np.float32) / 255.0
+
+        char_r = np.full_like(fire_r, r_b)
+        char_g = np.full_like(fire_g, g_b)
+        char_b = np.full_like(fire_b, b_b)
+        char_a = np.clip(burned_hi * 230.0, 0, 255).astype(np.float32) / 255.0
+
+        # Mathematically stack the Fire layer ON TOP of the Charcoal layer
+        # so the edges of the flame fade into charcoal, not into bright rock.
+        out_a = fire_a + char_a * (1.0 - fire_a)
+        
+        # Prevent divide-by-zero where both alphas are perfectly 0
+        safe_a = np.where(out_a > 0.001, out_a, 1.0)
+        
+        out_r = (fire_r * fire_a + char_r * char_a * (1.0 - fire_a)) / safe_a
+        out_g = (fire_g * fire_a + char_g * char_a * (1.0 - fire_a)) / safe_a
+        out_b = (fire_b * fire_a + char_b * char_a * (1.0 - fire_a)) / safe_a
+
+        overlay[:, :, 0] = np.clip(out_r, 0, 255).astype(np.uint8)
+        overlay[:, :, 1] = np.clip(out_g, 0, 255).astype(np.uint8)
+        overlay[:, :, 2] = np.clip(out_b, 0, 255).astype(np.uint8)
+        overlay[:, :, 3] = np.clip(out_a * 255.0, 0, 255).astype(np.uint8)
 
         return overlay
 
