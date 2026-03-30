@@ -77,7 +77,6 @@ FUEL_BANDS = [
 ]
 
 DEFAULT_FUEL_TYPE = 2  # Tropical Dry Deciduous (fallback)
-FUEL_FIREBREAK = 104   # Unburnable firebreak value
 
 # ═══════════════════════════════════════════════════════════
 # Cell2Fire Simulation Parameters
@@ -154,8 +153,9 @@ COLOR_ALPINE = (220, 150, 80)        # Bright baked sandy Laterite (Deccan rocks
 COLOR_BURNING = [(255, 30, 0), (255, 120, 0), (255, 230, 0), (255, 0, 0)] # More intense fire
 COLOR_BURNED = (20, 20, 20)          # Darker charcoal for higher contrast
 COLOR_BACKGROUND = (0, 0, 0)
-COLOR_UI_TEXT = (255, 255, 255)
-COLOR_WIND_ARROW = (150, 200, 255)
+COLOR_UI_TEXT = (255, 255, 0)       # High-visibility Yellow
+COLOR_WIND_ARROW = (50, 255, 255)   # Vivid Cyan
+COLOR_FIREBREAK = (60, 45, 35)      # Natural dark earth/soil color
 
 # Map fuel grid_values to display colors
 FUEL_COLORS = {
@@ -164,7 +164,7 @@ FUEL_COLORS = {
     2:   COLOR_CONIFER,
     3:   COLOR_DENSE_CONIFER,
     101: COLOR_ALPINE,
-    104: (0, 0, 0),      # Firebreak (base black, glowing handled in renderer)
+    103: COLOR_FIREBREAK,
 }
 
 # ═══════════════════════════════════════════════════════════

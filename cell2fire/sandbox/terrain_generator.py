@@ -207,13 +207,12 @@ class TerrainGenerator:
                     line = " ".join(f"{v:.1f}" for v in values)
                 f.write(line + "\n")
 
-    def generate_all(self, depth_frame: np.ndarray, output_dir: str, firelines: list = None) -> dict:
+    def generate_all(self, depth_frame: np.ndarray, output_dir: str) -> dict:
         """Full pipeline: depth frame → all Cell2Fire .asc raster files.
 
         Args:
             depth_frame: 2D uint16 array from the Kinect.
             output_dir: Directory to write the output files.
-            firelines: Optional list of tuples (r1, c1, r2, c2) to mark as unburnable.
 
         Returns:
             Dict with keys 'elevation', 'slope', 'aspect', 'fuel' containing
@@ -226,12 +225,6 @@ class TerrainGenerator:
         slope = self.compute_slope(elevation)
         aspect = self.compute_aspect(elevation)
         fuel_grid = self.classify_fuel(elevation)
-
-        # Apply firebreaks
-        if firelines:
-            for r1, c1, r2, c2 in firelines:
-                rr, cc = self._bresenham_line(r1, c1, r2, c2)
-                fuel_grid[rr, cc] = config.FUEL_FIREBREAK
 
         # Round slope and aspect to integers (Cell2Fire convention from sample data)
         slope_int = np.round(slope).astype(int)
@@ -259,31 +252,6 @@ class TerrainGenerator:
             "fuel": fuel_grid,
             "files": files,
         }
-
-    def _bresenham_line(self, r0, c0, r1, c1):
-        """Bresenham's line algorithm to get grid cells between two points."""
-        from . import config  # ensure we have config
-        rr, cc = [], []
-        dr = abs(r1 - r0)
-        dc = abs(c1 - c0)
-        sr = 1 if r0 < r1 else -1
-        sc = 1 if c0 < c1 else -1
-        err = dr - dc
-
-        while True:
-            if 0 <= r0 < config.SIM_ROWS and 0 <= c0 < config.SIM_COLS:
-                rr.append(r0)
-                cc.append(c0)
-            if r0 == r1 and c0 == c1:
-                break
-            e2 = 2 * err
-            if e2 > -dc:
-                err -= dc
-                r0 += sr
-            if e2 < dr:
-                err += dr
-                c0 += sc
-        return np.array(rr), np.array(cc)
 
     def generate_preview(self, depth_frame: np.ndarray) -> dict:
         """Fast memory-only pipeline for live continuous preview.

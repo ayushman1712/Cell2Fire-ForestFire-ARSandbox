@@ -63,11 +63,9 @@ class SandboxRenderer:
         Returns:
             np.ndarray of shape (height, width, 3) uint8 RGB.
         """
-        elev_hash = hash(elevation.tobytes())
         fuel_hash = hash(fuel_grid.tobytes()) if fuel_grid is not None else 0
-        state_hash = hash((elev_hash, fuel_hash))
-        
-        if self._cached_terrain is not None and state_hash == getattr(self, "_cached_hash", None):
+        state_hash = hash(elevation.tobytes()) ^ fuel_hash
+        if self._cached_terrain is not None and state_hash == self._cached_hash:
             return self._cached_terrain.copy()
 
         if HAS_CV2 and HAS_MATPLOTLIB:
@@ -101,6 +99,22 @@ class SandboxRenderer:
             wc = np.array(config.COLOR_WATER, dtype=np.float32)
             for ch in range(3):
                 rgb[:, :, ch] = (rgb[:, :, ch] * (1 - water * 0.5) + wc[ch] * water * 0.5).astype(np.uint8)
+
+            # Overlay firebreak cells (Smooth, textured "turned earth")
+            fb_mask = (fuel_grid == 103).astype(np.float32)
+            
+            # Smoothly upscale and blur for organic, non-pixelated look
+            fb_hi = cv2.resize(fb_mask, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
+            ks = max(int(self.cell_w * 0.4) | 1, 3) # Sharper blur for thinner line
+            fb_hi = cv2.GaussianBlur(fb_hi, (ks, ks), 0)
+            fb_hi = np.clip(fb_hi * 2.0, 0, 1) # Stronger boost for high contrast at thin scale
+            
+            # Set alpha: let underlying hillshade (shading/contours) show through slightly (0.7)
+            fb_alpha = fb_hi * 0.7
+            fb_c = np.array(config.COLOR_FIREBREAK, dtype=np.float32)
+            
+            for ch in range(3):
+                rgb[:, :, ch] = (rgb[:, :, ch] * (1 - fb_alpha) + fb_c[ch] * fb_alpha).astype(np.uint8)
 
         self._cached_terrain = rgb.copy()
         self._cached_hash = state_hash
@@ -221,39 +235,13 @@ class SandboxRenderer:
 
     # ── Compositing ──────────────────────────────────────────
 
-    def composite(self, terrain_rgb, fire_rgba=None, ignition_point=None, show_marker=False, fuel_grid=None, frame=0):
-        """Alpha-blend fire overlay onto terrain, optionally draw ignition marker and firebreaks.
+    def composite(self, terrain_rgb, fire_rgba=None, ignition_point=None, show_marker=False):
+        """Alpha-blend fire overlay onto terrain, optionally draw ignition marker.
 
         Returns:
             np.ndarray of shape (height, width, 3) uint8 RGB.
         """
         result = terrain_rgb.copy()
-        
-        # 1. Overlay Firebreaks (Config.FUEL_FIREBREAK) as Black with pulsing/glowing red/orange edge effect
-        if fuel_grid is not None and HAS_CV2:
-            break_mask = (fuel_grid == config.FUEL_FIREBREAK).astype(np.float32)
-            if np.any(break_mask > 0):
-                # Scale mask up
-                mask_hi = cv2.resize(break_mask, (self.width, self.height), interpolation=cv2.INTER_NEAREST)
-                
-                # Base black color
-                base_color = np.array([10, 10, 10], dtype=np.float32)
-                
-                # Glowing border 
-                edge_mask = cv2.GaussianBlur(mask_hi, (15, 15), 0) - mask_hi
-                edge_mask = np.clip(edge_mask * 3.0, 0, 1)
-                
-                # Pulse over time
-                pulse = (np.sin(frame * 0.1) * 0.5 + 0.5)
-                glow_color = np.array([255, 60 + pulse * 40, pulse * 20], dtype=np.float32)
-                
-                # Blend black body
-                for ch in range(3):
-                    result[:, :, ch] = np.where(mask_hi > 0, base_color[ch], result[:, :, ch])
-                
-                # Add glowing edges
-                for ch in range(3):
-                    result[:, :, ch] = np.minimum(255, result[:, :, ch] + glow_color[ch] * edge_mask)
 
         if fire_rgba is not None:
             alpha = fire_rgba[:, :, 3:4].astype(np.float32) / 255.0

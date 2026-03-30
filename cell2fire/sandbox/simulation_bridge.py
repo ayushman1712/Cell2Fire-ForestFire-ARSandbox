@@ -42,17 +42,16 @@ class SimulationBridge:
         self.terrain_gen = TerrainGenerator()
         self._last_grids = []
 
-    def prepare_terrain(self, depth_frame: np.ndarray, firelines: list = None) -> dict:
+    def prepare_terrain(self, depth_frame: np.ndarray) -> dict:
         """Generate terrain raster files from a depth frame.
 
         Args:
             depth_frame: 2D uint16 array from the Kinect.
-            firelines: Optional list of (r1, c1, r2, c2) firebreaks.
 
         Returns:
             Dict with terrain data and file paths.
         """
-        return self.terrain_gen.generate_all(depth_frame, self.sim_data_dir, firelines=firelines)
+        return self.terrain_gen.generate_all(depth_frame, self.sim_data_dir)
 
     def run_simulation(
         self,
@@ -274,7 +273,6 @@ class SimulationBridge:
         ignition_col: int = None,
         weather_params: dict = None,
         cache_path: str = None,
-        firelines: list = None,
     ) -> list:
         """Run full pipeline: terrain → simulation → save fire grids to disk.
 
@@ -284,7 +282,6 @@ class SimulationBridge:
             ignition_col: Col of the ignition point (default: config center).
             weather_params: Weather parameters (default: config defaults).
             cache_path: Path to save the .npz cache (default: config path).
-            firelines: Optional list of (r1, c1, r2, c2) firebreaks.
 
         Returns:
             List of fire grid arrays (same as run_simulation).
@@ -296,7 +293,7 @@ class SimulationBridge:
         print(f"[SimulationBridge] Precomputing simulation from ignition ({ig_row}, {ig_col})...")
 
         # Generate terrain files from the depth frame
-        result = self.prepare_terrain(depth_frame, firelines=firelines)
+        result = self.prepare_terrain(depth_frame)
 
         # Calculate 1-indexed cell ID (row-major order)
         ignition_cell_id = ig_row * config.SIM_COLS + ig_col + 1
