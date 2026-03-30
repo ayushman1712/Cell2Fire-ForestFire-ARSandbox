@@ -16,6 +16,9 @@ import pyglet
 import pyglet.event
 from pyglet.window import key, mouse
 
+# Wizard-of-Oz IPC
+from .woz_operator import read_command
+
 from . import config
 from .kinect_capture import KinectCapture
 from .terrain_generator import TerrainGenerator
@@ -106,7 +109,7 @@ class Cell2FireSandbox(pyglet.window.Window):
             x=10, y=self.height - 60, color=(255, 255, 255, 220),
         )
         self.controls_label = pyglet.text.Label(
-            "SPACE:Capture | F:Precompute | P:Play | Click:Ignite | R:Reset | ESC:Quit",
+            "Controls moved to WoZ Operator Console | ESC:Quit",
             font_name="Consolas", font_size=10,
             x=self.width // 2, y=10, anchor_x="center",
             color=(180, 180, 180, 200),
@@ -126,6 +129,9 @@ class Cell2FireSandbox(pyglet.window.Window):
         if self.fullscreen:
             pyglet.clock.schedule_once(self.flip_canvas, delay=2)
 
+        # ── Wizard-of-Oz command polling ──
+        pyglet.clock.schedule_interval(self._poll_woz_commands, 0.2)
+
         # Check for cached simulation
         cached = SimulationBridge.load_precomputed()
         if cached:
@@ -134,8 +140,8 @@ class Cell2FireSandbox(pyglet.window.Window):
         print("=" * 60)
         print("  Cell2Fire AR Sandbox — Pyglet Projection System")
         print("=" * 60)
-        print("\n  SPACE=Capture  F=Precompute  P=Play  Click=Ignite")
-        print("  Arrows=Wind Dir  +/-=Speed  R=Reset  ESC=Quit\n")
+        print("\n  [All controls moved to WoZ Operator Console]")
+        print("  ESC=Quit Pyglet window\n")
 
     # ── Canvas Flip (same as AR Sandbox) ────────────────────
 
@@ -164,54 +170,69 @@ class Cell2FireSandbox(pyglet.window.Window):
         if symbol == key.ESCAPE:
             self._cleanup()
             self.close()
-        elif symbol == key.SPACE:
-            self._capture_terrain()
-        elif symbol == key.F:
-            self._precompute_simulation()
-        elif symbol == key.P:
-            self._play_precomputed()
-        elif symbol == key.R:
-            self._reset_simulation()
-        elif symbol == key.T:
-            self._capture_terrain()
-        elif symbol == key.UP:
-            self._set_wind_direction("N")
-        elif symbol == key.DOWN:
-            self._set_wind_direction("S")
-        elif symbol == key.LEFT:
-            self._set_wind_direction("W")
-        elif symbol == key.RIGHT:
-            self._set_wind_direction("E")
-        elif symbol in (key.EQUAL, key.NUM_ADD):
-            self._adjust_wind_speed(5)
-        elif symbol in (key.MINUS, key.NUM_SUBTRACT):
-            self._adjust_wind_speed(-5)
 
     def on_mouse_press(self, x, y, button, modifiers):
-        if button != mouse.LEFT or not self.terrain_captured:
+        # Ignore mouse clicks inside the sandbox window
+        if not self.terrain_captured:
+            self.sim_status = "WoZ: Capture terrain first"
+            return
+
+    # ── Wizard-of-Oz Command Polling ────────────────────────
+
+    def _poll_woz_commands(self, dt=None):
+        """Check for pending Wizard-of-Oz operator commands."""
+        cmd = read_command()
+        if cmd is None:
+            return
+
+        cmd_type = cmd.get("type", "")
+
+        if cmd_type == "ignite":
+            row = cmd["row"]
+            col = cmd["col"]
+            print(f"[WoZ] Received ignition command: ({row}, {col})")
+
             if not self.terrain_captured:
-                self.sim_status = "Capture terrain first (SPACE)"
-            return
+                self.sim_status = "WoZ: Capture terrain first"
+                return
 
-        # pyglet y=0 at bottom → flip to grid row (top=0)
-        col = int(x / self.renderer.cell_w)
-        row = int((self.height - y) / self.renderer.cell_h)
-        row = max(0, min(row, config.SIM_ROWS - 1))
-        col = max(0, min(col, config.SIM_COLS - 1))
+            fuel_val = int(self.fuel_grid[row, col])
+            if fuel_val in {100, 101, 102, 103, 104, 105}:
+                self.sim_status = f"WoZ: Non-fuel cell at ({row}, {col})"
+                return
 
-        fuel_val = int(self.fuel_grid[row, col])
-        if fuel_val in {100, 101, 102, 103, 104, 105}:
-            self.sim_status = "Cannot ignite non-fuel cell"
-            return
+            self.ignition_point = (row, col)
+            self.ignition_cell_id = row * config.SIM_COLS + col + 1
+            self.sim_status = f"WoZ fire at ({row}, {col})..."
+            print(f"[WoZ] Ignition at ({row}, {col}), cell ID={self.ignition_cell_id}")
 
-        self.ignition_point = (row, col)
-        self.ignition_cell_id = row * config.SIM_COLS + col + 1
-        self.sim_status = f"Running simulation from ({row}, {col})..."
-        print(f"[App] Ignition at ({row}, {col}), cell ID={self.ignition_cell_id}")
+            if self._depth_frame is not None:
+                self.sim_bridge.prepare_terrain(self._depth_frame)
+            self._run_simulation()
 
-        if self._depth_frame is not None:
-            self.sim_bridge.prepare_terrain(self._depth_frame)
-        self._run_simulation()
+        elif cmd_type == "reset":
+            print("[WoZ] Received reset command.")
+            self._reset_simulation()
+        
+        elif cmd_type == "capture":
+            print("[WoZ] Received capture command.")
+            self._capture_terrain()
+            
+        elif cmd_type == "precompute":
+            print("[WoZ] Received precompute command.")
+            self._precompute_simulation()
+            
+        elif cmd_type == "play":
+            print("[WoZ] Received play command.")
+            self._play_precomputed()
+            
+        elif cmd_type == "wind_dir":
+            print(f"[WoZ] Received wind_dir command: {cmd.get('dir')}")
+            self._set_wind_direction(cmd.get("dir", "N"))
+            
+        elif cmd_type == "wind_speed":
+            print(f"[WoZ] Received wind_speed command: delta {cmd.get('delta')}")
+            self._adjust_wind_speed(cmd.get("delta", 0))
 
     # ── Rendering (on_draw, same pattern as MCSandTable) ────
 

@@ -15,30 +15,34 @@ Ensure your environment has the following installed:
 - `matplotlib` (Colormap generation)
 - `pykinect2` (Kinect v2 hardware interfacing)
 
-## How to Run
-Run the projector visualizer directly as a module from the root directory:
+## Wizard of Oz (WoZ) Prototyping
+
+For user testing and rapid prototyping, the system supports a dual-window "Wizard of Oz" mode. This allows an operator to control the simulation (start fires, change wind, reset) from a separate monitor without the participant seeing the controls on the projected sand.
+
+### 1. Start the Projector Display
+This window should be moved to the projector screen. It only displays the simulation and has no interactive controls (except ESC to quit).
 ```bash
 python -m cell2fire.sandbox
 ```
 
-## Hardware Calibration Guide
+### 2. Start the Operator Console
+Run this in a separate terminal on your primary monitor. It shows a live, 2.5x scaled Kinect depth view to help you spot physical tokens placed by the user.
+```bash
+python -m cell2fire.sandbox.woz_operator
+```
 
-Before running the simulation properly, you must configure the projection bounds to match your physical sand.
-
-### 1. Depth Calibration
-Run `python measure_depth.py` from the root folder to point your mouse and find raw depth values in mm.
-- **DEPTH_MAX_MM**: The distance to the flat bottom/table holding the sand.
-- **DEPTH_MIN_MM**: The distance to the tallest sand peak you intend to build.
-Enter these values into `config.py`.
-
-### 2. Aspect Ratio / Framing
-Run `python calibrate_kinect.py` from the root folder to visually draw a 16:10 rectangle over your sand view. 
-Copy the generated `KINECT_ROI` dictionary from the terminal into `config.py`.
-
-### 3. Projector & Sensor Mirroring
-If your projector is mounted backwards or upside down via a mirror:
-Set your projector hardware's "Projection" setting so the HUD Text is perfectly readable.
-Then adjust `MIRROR_KINECT_X` and `MIRROR_KINECT_Y` in `config.py` to ensure physical sand touches match the simulated terrain locations.
+### Operator Controls
+| Action | Key/Mouse |
+| :--- | :--- |
+| **Ignite Fire** | Left Click (on operator window) |
+| **Capture Terrain** | `SPACE` |
+| **Precompute Sim** | `F` |
+| **Play Cache** | `P` |
+| **Wind Direction** | `W`, `A`, `S`, `D` (N, W, S, E) |
+| **Wind Speed** | `+` / `-` |
+| **Reset Simulation** | `R` |
+| **Toggle Grid** | `G` |
+| **Quit** | `ESC` / `Q` |
 
 ## Biomes & Colors
 All visual rendering (Rivers, Biome elevations, Fire gradients) is fully decoupled and configurable within `config.py` under the `FUEL_BANDS` and `COLOR_XYZ` variables.
