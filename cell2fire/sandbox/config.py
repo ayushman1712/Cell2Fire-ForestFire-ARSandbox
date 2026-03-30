@@ -155,6 +155,7 @@ COLOR_BURNED = (20, 20, 20)          # Darker charcoal for higher contrast
 COLOR_BACKGROUND = (0, 0, 0)
 COLOR_UI_TEXT = (255, 255, 255)
 COLOR_WIND_ARROW = (150, 200, 255)
+COLOR_FIREBREAK = (60, 45, 35)      # Natural dark earth/soil color
 
 # Map fuel grid_values to display colors
 FUEL_COLORS = {
@@ -163,6 +164,7 @@ FUEL_COLORS = {
     2:   COLOR_CONIFER,
     3:   COLOR_DENSE_CONIFER,
     101: COLOR_ALPINE,
+    103: COLOR_FIREBREAK,
 }
 
 # ═══════════════════════════════════════════════════════════

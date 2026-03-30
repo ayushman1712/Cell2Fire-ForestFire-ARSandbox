@@ -63,8 +63,9 @@ class SandboxRenderer:
         Returns:
             np.ndarray of shape (height, width, 3) uint8 RGB.
         """
-        elev_hash = hash(elevation.tobytes())
-        if self._cached_terrain is not None and elev_hash == self._cached_hash:
+        fuel_hash = hash(fuel_grid.tobytes()) if fuel_grid is not None else 0
+        state_hash = hash(elevation.tobytes()) ^ fuel_hash
+        if self._cached_terrain is not None and state_hash == self._cached_hash:
             return self._cached_terrain.copy()
 
         if HAS_CV2 and HAS_MATPLOTLIB:
@@ -99,8 +100,24 @@ class SandboxRenderer:
             for ch in range(3):
                 rgb[:, :, ch] = (rgb[:, :, ch] * (1 - water * 0.5) + wc[ch] * water * 0.5).astype(np.uint8)
 
+            # Overlay firebreak cells (Smooth, textured "turned earth")
+            fb_mask = (fuel_grid == 103).astype(np.float32)
+            
+            # Smoothly upscale and blur for organic, non-pixelated look
+            fb_hi = cv2.resize(fb_mask, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
+            ks = max(int(self.cell_w * 0.4) | 1, 3) # Sharper blur for thinner line
+            fb_hi = cv2.GaussianBlur(fb_hi, (ks, ks), 0)
+            fb_hi = np.clip(fb_hi * 2.0, 0, 1) # Stronger boost for high contrast at thin scale
+            
+            # Set alpha: let underlying hillshade (shading/contours) show through slightly (0.7)
+            fb_alpha = fb_hi * 0.7
+            fb_c = np.array(config.COLOR_FIREBREAK, dtype=np.float32)
+            
+            for ch in range(3):
+                rgb[:, :, ch] = (rgb[:, :, ch] * (1 - fb_alpha) + fb_c[ch] * fb_alpha).astype(np.uint8)
+
         self._cached_terrain = rgb.copy()
-        self._cached_hash = elev_hash
+        self._cached_hash = state_hash
         return rgb
 
     def _draw_contours(self, image, elevation):

@@ -15,9 +15,10 @@ import numpy as np
 import pyglet
 import pyglet.event
 from pyglet.window import key, mouse
+import cv2
 
 # Wizard-of-Oz IPC
-from .woz_operator import read_command
+from .woz_operator import read_commands, write_state
 
 from . import config
 from .kinect_capture import KinectCapture
@@ -132,7 +133,7 @@ class Cell2FireSandbox(pyglet.window.Window):
             pyglet.clock.schedule_once(self.flip_canvas, delay=2)
 
         # ── Wizard-of-Oz command polling ──
-        pyglet.clock.schedule_interval(self._poll_woz_commands, 0.2)
+        pyglet.clock.schedule_interval(self._poll_woz_commands, 0.05)
 
         # Check for cached simulation
         cached = SimulationBridge.load_precomputed()
@@ -183,64 +184,81 @@ class Cell2FireSandbox(pyglet.window.Window):
 
     def _poll_woz_commands(self, dt=None):
         """Check for pending Wizard-of-Oz operator commands."""
-        cmd = read_command()
-        if cmd is None:
+        cmds = read_commands()
+        if not cmds:
             return
 
-        cmd_type = cmd.get("type", "")
+        for cmd in cmds:
+            cmd_type = cmd.get("type", "")
 
-        if cmd_type == "ignite":
-            row = cmd["row"]
-            col = cmd["col"]
-            print(f"[WoZ] Received ignition command: ({row}, {col})")
+            if cmd_type == "ignite":
+                row = cmd["row"]
+                col = cmd["col"]
+                print(f"[WoZ] Received ignition command: ({row}, {col})")
 
-            if not self.terrain_captured:
-                self.sim_status = "WoZ: Capture terrain first"
-                return
+                if not self.terrain_captured:
+                    self.sim_status = "WoZ: Capture terrain first"
+                    continue # Use continue instead of return since we are in a loop
 
-            fuel_val = int(self.fuel_grid[row, col])
-            if fuel_val in {100, 101, 102, 103, 104, 105}:
-                self.sim_status = f"WoZ: Non-fuel cell at ({row}, {col})"
-                return
+                fuel_val = int(self.fuel_grid[row, col])
+                if fuel_val in {100, 101, 102, 103, 104, 105}:
+                    self.sim_status = f"WoZ: Non-fuel cell at ({row}, {col})"
+                    continue
 
-            self.ignition_point = (row, col)
-            self.ignition_cell_id = row * config.SIM_COLS + col + 1
-            self.sim_status = f"WoZ fire at ({row}, {col})..."
-            print(f"[WoZ] Ignition at ({row}, {col}), cell ID={self.ignition_cell_id}")
+                self.ignition_point = (row, col)
+                self.ignition_cell_id = row * config.SIM_COLS + col + 1
+                self.sim_status = f"WoZ fire at ({row}, {col})..."
+                print(f"[WoZ] Ignition at ({row}, {col}), cell ID={self.ignition_cell_id}")
 
-            if self._depth_frame is not None:
-                self.sim_bridge.prepare_terrain(self._depth_frame)
-            self._run_simulation()
+                if self._depth_frame is not None:
+                    # This overwrites all asc files including Forest.asc
+                    self.sim_bridge.prepare_terrain(self._depth_frame)
+                    # Overwrite Forest.asc with our modified fuel_grid that contains firebreaks
+                    forest_asc = os.path.join(self.sim_bridge.sim_data_dir, "Forest.asc")
+                    self.terrain_gen.write_asc(self.fuel_grid, forest_asc, config.CELL_SIZE_METERS)
+                    
+                self._run_simulation()
 
-        elif cmd_type == "reset":
-            print("[WoZ] Received reset command.")
-            self._reset_simulation()
-        
-        elif cmd_type == "capture":
-            print("[WoZ] Received capture command.")
-            self._capture_terrain()
+            elif cmd_type == "reset":
+                print("[WoZ] Received reset command.")
+                self._reset_simulation()
+                
+            elif cmd_type == "firebreak_line":
+                r1, c1 = cmd.get("r1"), cmd.get("c1")
+                r2, c2 = cmd.get("r2"), cmd.get("c2")
+                # print(f"[WoZ] Received firebreak line: ({r1}, {c1}) to ({r2}, {c2})")
+                if not self.terrain_captured or self.fuel_grid is None:
+                    self.sim_status = "WoZ: Capture terrain first"
+                    continue
+                self._draw_firebreak_line(r1, c1, r2, c2)
+                # self.sim_status = f"Firebreak ({r1},{c1}) to ({r2},{c2})"
+                self._sync_woz_state()
             
-        elif cmd_type == "precompute":
-            print("[WoZ] Received precompute command.")
-            self._precompute_simulation()
-            
-        elif cmd_type == "play":
-            print("[WoZ] Received play command.")
-            self._play_precomputed()
-            
-        elif cmd_type == "wind_dir":
-            print(f"[WoZ] Received wind_dir command: {cmd.get('dir')}")
-            self._set_wind_direction(cmd.get("dir", "N"))
-            
-        elif cmd_type == "wind_speed":
-            print(f"[WoZ] Received wind_speed command: delta {cmd.get('delta')}")
-            self._adjust_wind_speed(cmd.get("delta", 0))
-            
-        elif cmd_type == "anim_speed":
-            delta = cmd.get("delta", 0)
-            self.frames_per_step = max(5, min(100, self.frames_per_step + delta))
-            print(f"[WoZ] Received anim_speed command. New speed: {self.frames_per_step} frames/step")
-            self.sim_status = f"Visual speed: {self.frames_per_step} frames/step"
+            elif cmd_type == "capture":
+                print("[WoZ] Received capture command.")
+                self._capture_terrain()
+                
+            elif cmd_type == "precompute":
+                print("[WoZ] Received precompute command.")
+                self._precompute_simulation()
+                
+            elif cmd_type == "play":
+                print("[WoZ] Received play command.")
+                self._play_precomputed()
+                
+            elif cmd_type == "wind_dir":
+                print(f"[WoZ] Received wind_dir command: {cmd.get('dir')}")
+                self._set_wind_direction(cmd.get("dir", "N"))
+                
+            elif cmd_type == "wind_speed":
+                print(f"[WoZ] Received wind_speed command: delta {cmd.get('delta')}")
+                self._adjust_wind_speed(cmd.get("delta", 0))
+                
+            elif cmd_type == "anim_speed":
+                delta = cmd.get("delta", 0)
+                self.frames_per_step = max(5, min(100, self.frames_per_step + delta))
+                print(f"[WoZ] Received anim_speed command. New speed: {self.frames_per_step} frames/step")
+                self.sim_status = f"Visual speed: {self.frames_per_step} frames/step"
 
     # ── Rendering (on_draw, same pattern as MCSandTable) ────
 
@@ -342,6 +360,7 @@ class Cell2FireSandbox(pyglet.window.Window):
         self.fuel_grid = result["fuel"]
         self.terrain_captured = True
         self._reset_simulation()
+        self._sync_woz_state()  # Reset operator view
         self.sim_status = "Terrain captured. Click to ignite or F to precompute."
         print("[App] Terrain captured.")
 
@@ -449,6 +468,63 @@ class Cell2FireSandbox(pyglet.window.Window):
             self.next_fire_grid = None
             self.fire_blend = 0.0
             self.sim_status = f"Complete — {len(self.fire_grids)} steps"
+
+    def _draw_firebreak_line(self, r1, c1, r2, c2):
+        """Draws a 1-cell wide, 4-connected firebreak line (prevents diagonal leaks)."""
+        if self.fuel_grid is None:
+            return
+            
+        # Use a 4-connected stepping algorithm (Manhattan steps)
+        # to ensure fire cannot jump through diagonal corners.
+        r, c = r1, c1
+        dr = abs(r2 - r1)
+        dc = abs(c2 - c1)
+        sr = 1 if r1 < r2 else -1
+        sc = 1 if c1 < c2 else -1
+        err = dr - dc
+
+        while True:
+            # Mark current cell
+            if 0 <= r < config.SIM_ROWS and 0 <= c < config.SIM_COLS:
+                if self.fuel_grid[r, c] != 102:
+                    self.fuel_grid[r, c] = 103
+            
+            if r == r2 and c == c2:
+                break
+            
+            e2 = 2 * err
+            # Step in rows first, then cols (preventing diagonal leap)
+            if e2 > -dc:
+                err -= dc
+                r += sr
+                # Intermediate step to close the diagonal corner
+                if 0 <= r < config.SIM_ROWS and 0 <= c < config.SIM_COLS:
+                    if self.fuel_grid[r, c] != 102:
+                        self.fuel_grid[r, c] = 103
+
+            if r == r2 and c == c2:
+                break
+                
+            if e2 < dr:
+                err += dr
+                c += sc
+                # Final step of this segment
+                if 0 <= r < config.SIM_ROWS and 0 <= c < config.SIM_COLS:
+                    if self.fuel_grid[r, c] != 102:
+                        self.fuel_grid[r, c] = 103
+
+        # Ensure changes are saved to disk for the engine
+        forest_asc = os.path.join(self.sim_bridge.sim_data_dir, "Forest.asc")
+        self.terrain_gen.write_asc(self.fuel_grid, forest_asc, config.CELL_SIZE_METERS)
+
+    def _sync_woz_state(self):
+        """Export established firebreak coordinates to the WoZ operator console."""
+        if self.fuel_grid is None:
+            return
+        
+        rows, cols = np.where(self.fuel_grid == 103)
+        firebreaks = list(zip(rows.tolist(), cols.tolist()))
+        write_state({"firebreaks": firebreaks})
 
     # ── Lifecycle ───────────────────────────────────────────
 
