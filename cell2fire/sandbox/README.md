@@ -40,6 +40,7 @@ python -m cell2fire.sandbox.woz_operator
 | **Play Cache** | `P` |
 | **Wind Direction** | `W`, `A`, `S`, `D` (N, W, S, E) |
 | **Wind Speed** | `+` / `-` |
+| **Fire Spread Speed** | `<` / `>` (Comma / Period) |
 | **Reset Simulation** | `R` |
 | **Toggle Grid** | `G` |
 | **Quit** | `ESC` / `Q` |

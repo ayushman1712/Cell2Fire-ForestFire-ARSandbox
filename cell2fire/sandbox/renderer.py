@@ -121,8 +121,8 @@ class SandboxRenderer:
 
     # ── Fire Overlay ─────────────────────────────────────────
 
-    def generate_fire_overlay(self, fire_grid, frame):
-        """Generate smooth fire RGBA overlay at display resolution.
+    def generate_fire_overlay(self, fire_grid, next_fire_grid=None, blend=0.0, frame=0):
+        """Generate smooth fire RGBA overlay at display resolution with cross-fading.
 
         Returns:
             np.ndarray of shape (height, width, 4) uint8 RGBA.
@@ -130,8 +130,18 @@ class SandboxRenderer:
         if not HAS_CV2:
             return self._fire_fallback(fire_grid)
 
-        burning = (fire_grid == 1).astype(np.float32)
-        burned = (fire_grid == 2).astype(np.float32)
+        burning_curr = (fire_grid == 1).astype(np.float32)
+        burned_curr = (fire_grid == 2).astype(np.float32)
+
+        if next_fire_grid is not None and blend > 0:
+            burning_next = (next_fire_grid == 1).astype(np.float32)
+            burned_next = (next_fire_grid == 2).astype(np.float32)
+            
+            burning = burning_curr * (1.0 - blend) + burning_next * blend
+            burned = burned_curr * (1.0 - blend) + burned_next * blend
+        else:
+            burning = burning_curr
+            burned = burned_curr
 
         # Upscale with smooth interpolation + Gaussian blur (Linear prevents ringing artifacts)
         ks = max(int(self.cell_w * 0.8) | 1, 3)

@@ -134,6 +134,7 @@ class WizardOfOzConsole:
         print("  P           → Play cached simulation")
         print("  W/A/S/D     → Wind direction (N/W/S/E)")
         print("  +/-         → Adjust wind speed")
+        print("  < / >       → Slower / Faster fire spread")
         print("  R           → Send reset command")
         print("  G           → Toggle grid overlay")
         print("  ESC / Q     → Quit")
@@ -391,6 +392,10 @@ class WizardOfOzConsole:
                 send_command({"type": "wind_speed", "delta": 5})
             elif k == ord("-"):
                 send_command({"type": "wind_speed", "delta": -5})
+            elif k == ord(","):  # Slower animation (more frames per step)
+                send_command({"type": "anim_speed", "delta": 5})
+            elif k == ord("."):  # Faster animation (fewer frames per step)
+                send_command({"type": "anim_speed", "delta": -5})
 
         # Cleanup
         cv2.destroyAllWindows()
