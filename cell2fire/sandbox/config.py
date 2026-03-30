@@ -77,6 +77,7 @@ FUEL_BANDS = [
 ]
 
 DEFAULT_FUEL_TYPE = 2  # Tropical Dry Deciduous (fallback)
+FUEL_FIREBREAK = 104   # Unburnable firebreak value
 
 # ═══════════════════════════════════════════════════════════
 # Cell2Fire Simulation Parameters
@@ -163,6 +164,7 @@ FUEL_COLORS = {
     2:   COLOR_CONIFER,
     3:   COLOR_DENSE_CONIFER,
     101: COLOR_ALPINE,
+    104: (0, 0, 0),      # Firebreak (base black, glowing handled in renderer)
 }
 
 # ═══════════════════════════════════════════════════════════

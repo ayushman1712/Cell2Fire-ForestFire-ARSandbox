@@ -101,6 +101,9 @@ class WizardOfOzConsole:
         # Grid overlay
         self.show_grid = True
         self.last_click = None  # (row, col) in sim grid
+        self.interaction_mode = "ignite"  # "ignite" or "firebreak"
+        self.firebreak_start = None       # (row, col) when click 1 happens
+        self.mouse_pos_grid = None        # current hovered (row, col)
 
         # Initialize Kinect
         if HAS_PYKINECT:
@@ -128,9 +131,10 @@ class WizardOfOzConsole:
         print("=" * 50)
         print("  WIZARD OF OZ OPERATOR CONSOLE")
         print("=" * 50)
-        print("  LEFT CLICK  → Set fire ignition point")
+        print("  LEFT CLICK  → Set fire ignition point / draw firebreak")
         print("  SPACE       → Capture terrain")
-        print("  F           → Precompute simulation")
+        print("  C           → Precompute simulation")
+        print("  F           → Toggle Firebreak Mode")
         print("  P           → Play cached simulation")
         print("  W/A/S/D     → Wind direction (N/W/S/E)")
         print("  +/-         → Adjust wind speed")
@@ -141,24 +145,34 @@ class WizardOfOzConsole:
         print("=" * 50)
 
     def _on_mouse(self, event, x, y, flags, param):
-        """Handle mouse click on the operator window."""
-        if event != cv2.EVENT_LBUTTONDOWN:
-            return
-
+        """Handle mouse movement / click on the operator window."""
         # Convert display coords → simulation grid coords
-        # Since the image is now mirrored to match the grid, we map directly
         grid_col = int(x / self.display_w * config.SIM_COLS)
         grid_row = int(y / self.display_h * config.SIM_ROWS)
-
-        # Clamp to valid range
         grid_row = max(0, min(grid_row, config.SIM_ROWS - 1))
         grid_col = max(0, min(grid_col, config.SIM_COLS - 1))
 
-        self.last_click = (grid_row, grid_col)
-        print(f"[WoZ] Click at display ({x}, {y}) → "
-              f"Grid ({grid_row}, {grid_col})")
+        if event == cv2.EVENT_MOUSEMOVE:
+            self.mouse_pos_grid = (grid_row, grid_col)
+            
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
 
-        send_command({"type": "ignite", "row": grid_row, "col": grid_col})
+        if self.interaction_mode == "ignite":
+            self.last_click = (grid_row, grid_col)
+            print(f"[WoZ] Ignition click at grid ({grid_row}, {grid_col})")
+            send_command({"type": "ignite", "row": grid_row, "col": grid_col})
+            
+        elif self.interaction_mode == "firebreak":
+            if self.firebreak_start is None:
+                self.firebreak_start = (grid_row, grid_col)
+                print(f"[WoZ] Firebreak start at grid ({grid_row}, {grid_col})")
+            else:
+                r1, c1 = self.firebreak_start
+                r2, c2 = grid_row, grid_col
+                print(f"[WoZ] Firebreak drawn from ({r1}, {c1}) to ({r2}, {c2})")
+                send_command({"type": "fireline", "r1": r1, "c1": c1, "r2": r2, "c2": c2})
+                self.firebreak_start = None  # Reset for next line
 
     def _get_depth_frame(self):
         """Get a raw depth frame from Kinect or fallback."""
@@ -285,6 +299,27 @@ class WizardOfOzConsole:
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1,
                     cv2.LINE_AA)
 
+    def _draw_firebreak_overlay(self, image):
+        """Draw the current firebreak being drawn."""
+        if self.interaction_mode != "firebreak" or self.firebreak_start is None or self.mouse_pos_grid is None:
+            return
+
+        r1, c1 = self.firebreak_start
+        r2, c2 = self.mouse_pos_grid
+        
+        h, w = image.shape[:2]
+        cell_w = w / config.SIM_COLS
+        cell_h = h / config.SIM_ROWS
+        
+        cx1 = int((c1 + 0.5) * cell_w)
+        cy1 = int((r1 + 0.5) * cell_h)
+        cx2 = int((c2 + 0.5) * cell_w)
+        cy2 = int((r2 + 0.5) * cell_h)
+        
+        cv2.circle(image, (cx1, cy1), 5, (0, 0, 255), -1, cv2.LINE_AA)
+        cv2.line(image, (cx1, cy1), (cx2, cy2), (0, 0, 255), 2, cv2.LINE_AA)
+        cv2.circle(image, (cx2, cy2), 5, (0, 150, 255), -1, cv2.LINE_AA)
+
     def _draw_status_bar(self, image):
         """Draw a status bar at the bottom of the display."""
         h, w = image.shape[:2]
@@ -292,16 +327,18 @@ class WizardOfOzConsole:
         cv2.rectangle(image, (0, h - bar_h), (w, h), (30, 30, 30), -1)
 
         status = "LIVE KINECT" if self.has_kinect else "FALLBACK IMAGE"
+        mode_str = f"MODE: {self.interaction_mode.upper()}"
         grid_text = f"Grid: {config.SIM_ROWS}x{config.SIM_COLS}"
         click_text = (
             f"Last: ({self.last_click[0]},{self.last_click[1]})"
             if self.last_click
             else "Click to ignite"
         )
+        mode_color = (0, 255, 255) if self.interaction_mode == "ignite" else (0, 150, 255)
 
-        cv2.putText(image, f"[{status}]  {grid_text}  |  {click_text}",
+        cv2.putText(image, f"[{status}]  {mode_str} | {grid_text}  |  {click_text}",
                     (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                    (200, 200, 200), 1, cv2.LINE_AA)
+                    mode_color, 1, cv2.LINE_AA)
 
         # Grid toggle indicator
         g_text = "[G]rid: ON" if self.show_grid else "[G]rid: OFF"
@@ -360,6 +397,7 @@ class WizardOfOzConsole:
             # Overlays
             self._draw_grid_overlay(display)
             self._draw_click_marker(display)
+            self._draw_firebreak_overlay(display)
             self._draw_status_bar(display)
 
             cv2.imshow(self.WINDOW_NAME, display)
@@ -373,8 +411,12 @@ class WizardOfOzConsole:
                 print(f"[WoZ] Grid overlay: {'ON' if self.show_grid else 'OFF'}")
             elif k == ord(" "):
                 send_command({"type": "capture"})
-            elif k == ord("f") or k == ord("F"):
+            elif k == ord("c") or k == ord("C"):
                 send_command({"type": "precompute"})
+            elif k == ord("f") or k == ord("F"):
+                self.interaction_mode = "firebreak" if self.interaction_mode == "ignite" else "ignite"
+                self.firebreak_start = None
+                print(f"[WoZ] Toggled mode to: {self.interaction_mode}")
             elif k == ord("p") or k == ord("P"):
                 send_command({"type": "play"})
             elif k == ord("r") or k == ord("R"):

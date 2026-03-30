@@ -88,6 +88,7 @@ class Cell2FireSandbox(pyglet.window.Window):
 
         self.ignition_point = None
         self.ignition_cell_id = None
+        self.firelines = []
 
         self.sim_running = False
         self.fire_grids = []
@@ -209,12 +210,23 @@ class Cell2FireSandbox(pyglet.window.Window):
             print(f"[WoZ] Ignition at ({row}, {col}), cell ID={self.ignition_cell_id}")
 
             if self._depth_frame is not None:
-                self.sim_bridge.prepare_terrain(self._depth_frame)
+                self.sim_bridge.prepare_terrain(self._depth_frame, firelines=self.firelines)
             self._run_simulation()
 
         elif cmd_type == "reset":
             print("[WoZ] Received reset command.")
             self._reset_simulation()
+            
+        elif cmd_type == "fireline":
+            print(f"[WoZ] Received fireline: ({cmd['r1']}, {cmd['c1']}) to ({cmd['r2']}, {cmd['c2']})")
+            self.firelines.append((cmd['r1'], cmd['c1'], cmd['r2'], cmd['c2']))
+            # If we already have terrain, re-apply it so it instantly shows up
+            if self.terrain_captured and self._depth_frame is not None:
+                print("[App] Re-capturing terrain to bake in firebreak...")
+                result = self.sim_bridge.prepare_terrain(self._depth_frame, firelines=self.firelines)
+                self.elevation = result["elevation"]
+                self.fuel_grid = result["fuel"]
+                self.sim_status = "Firebreak added!"
         
         elif cmd_type == "capture":
             print("[WoZ] Received capture command.")
@@ -263,7 +275,14 @@ class Cell2FireSandbox(pyglet.window.Window):
                 )
 
             show_marker = self.ignition_point is not None and not self.sim_running
-            final = self.renderer.composite(terrain, fire, self.ignition_point, show_marker)
+            final = self.renderer.composite(
+                terrain, 
+                fire, 
+                self.ignition_point, 
+                show_marker, 
+                fuel_grid=self.fuel_grid, 
+                frame=self.frame
+            )
 
             # Convert to pyglet and blit (same as MCSandTable)
             pimg = self.numpy_to_pyglet(final)
@@ -337,7 +356,7 @@ class Cell2FireSandbox(pyglet.window.Window):
             self.sim_status = "Failed to capture depth frame"
             return
         self._depth_frame = depth.copy()
-        result = self.sim_bridge.prepare_terrain(depth)
+        result = self.sim_bridge.prepare_terrain(depth, firelines=self.firelines)
         self.elevation = result["elevation"]
         self.fuel_grid = result["fuel"]
         self.terrain_captured = True
@@ -353,7 +372,7 @@ class Cell2FireSandbox(pyglet.window.Window):
         self.sim_status = f"Precomputing from ({r}, {c})..."
         print(f"[App] Precomputing from ({r}, {c})...")
         grids = self.sim_bridge.precompute_and_save(
-            self._depth_frame, r, c, self.weather_params,
+            self._depth_frame, r, c, self.weather_params, firelines=self.firelines
         )
         if grids:
             self.sim_status = f"Precomputed! {len(grids)} steps. Press P to play."
