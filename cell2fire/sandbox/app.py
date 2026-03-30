@@ -98,18 +98,18 @@ class Cell2FireSandbox(pyglet.window.Window):
         self.weather_params = config.DEFAULT_WEATHER.copy()
 
         # ── HUD Labels ──
-        self.fps_display = pyglet.window.FPSDisplay(window=self, color=(255, 0, 0, 180))
+        self.fps_display = pyglet.window.FPSDisplay(window=self, color=(255, 0, 0, 255))
         self.status_label = pyglet.text.Label(
-            "", font_name=["Arial Black", "Arial", "Verdana"], font_size=24,
-            x=15, y=self.height - 25, color=(*config.COLOR_UI_TEXT, 255),
+            "", font_name="Consolas", font_size=12,
+            x=10, y=self.height - 20, color=(255, 255, 255, 220),
         )
         self.step_label = pyglet.text.Label(
-            "", font_name=["Arial Black", "Arial", "Verdana"], font_size=20,
-            x=15, y=self.height - 65, color=(*config.COLOR_UI_TEXT, 255),
+            "", font_name="Consolas", font_size=12,
+            x=10, y=self.height - 40, color=(255, 255, 255, 220),
         )
         self.weather_label = pyglet.text.Label(
-            "", font_name=["Arial Black", "Arial", "Verdana"], font_size=20,
-            x=15, y=self.height - 95, color=(*config.COLOR_UI_TEXT, 255),
+            "", font_name="Consolas", font_size=12,
+            x=10, y=self.height - 60, color=(255, 255, 255, 220),
         )
         self.controls_label = pyglet.text.Label(
             "Controls moved to WoZ Operator Console | ESC:Quit",
@@ -118,21 +118,15 @@ class Cell2FireSandbox(pyglet.window.Window):
             color=(180, 180, 180, 200),
         )
         self.wind_label = pyglet.text.Label(
-            "WIND", font_name=["Arial Black", "Arial", "Verdana"], font_size=14,
+            "WIND", font_name="Consolas", font_size=10,
             x=self.width - 60, y=self.height - 10,
-            anchor_x="center", color=(*config.COLOR_WIND_ARROW, 255),
+            anchor_x="center", color=(200, 200, 255, 220),
         )
         self.wind_speed_label = pyglet.text.Label(
-            "", font_name=["Arial Black", "Arial", "Verdana"], font_size=14,
+            "", font_name="Consolas", font_size=10,
             x=self.width - 60, y=self.height - 110,
-            anchor_x="center", color=(*config.COLOR_WIND_ARROW, 255),
+            anchor_x="center", color=(200, 200, 255, 220),
         )
-
-        # ── HUD Graphics ──
-        self._hud_plate = pyglet.shapes.Rectangle(
-            0, self.height - 140, 420, 140, color=(0, 0, 0)
-        )
-        self._hud_plate.opacity = 160
 
         # ── Projector flip ──
         if self.fullscreen:
@@ -300,9 +294,7 @@ class Cell2FireSandbox(pyglet.window.Window):
         self.frame += 1
 
     def _draw_hud(self):
-        """Draw HUD labels with a semi-transparent plate for readability."""
-        self._hud_plate.draw()
-
+        """Draw HUD labels."""
         wp = self.weather_params
         self.status_label.text = self.sim_status
         self.step_label.text = f"Step: {self.time_step}"
@@ -369,7 +361,7 @@ class Cell2FireSandbox(pyglet.window.Window):
         self.terrain_captured = True
         self._reset_simulation()
         self._sync_woz_state()  # Reset operator view
-        self.sim_status = "Terrain captured."
+        self.sim_status = "Terrain captured. Click to ignite or F to precompute."
         print("[App] Terrain captured.")
 
     def _precompute_simulation(self):

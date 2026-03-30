@@ -65,14 +65,9 @@ def send_command(cmd_dict: dict):
 
     cmds.append(cmd_dict)
     
-    # Write back (with retry to handle file lock during rapid curve drawing)
-    for _ in range(5):
-        try:
-            with open(WOZ_COMMAND_FILE, "w") as f:
-                json.dump(cmds, f)
-            break
-        except PermissionError:
-            time.sleep(0.01)
+    # Write back
+    with open(WOZ_COMMAND_FILE, "w") as f:
+        json.dump(cmds, f)
     
     if cmd_dict["type"] == "ignite":
         print(f"[WoZ] Sent ignition command: row={cmd_dict.get('row')}, col={cmd_dict.get('col')}")
