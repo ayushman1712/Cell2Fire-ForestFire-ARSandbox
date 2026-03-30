@@ -77,7 +77,9 @@ class Cell2FireSandbox(pyglet.window.Window):
 
         # ── State ──
         self.frame = 0
+        self.anim_frame = 0
         self.time_step = 0
+        self.frames_per_step = 15  # Default visual speed
 
         self.terrain_captured = False
         self.elevation = None
@@ -233,6 +235,12 @@ class Cell2FireSandbox(pyglet.window.Window):
         elif cmd_type == "wind_speed":
             print(f"[WoZ] Received wind_speed command: delta {cmd.get('delta')}")
             self._adjust_wind_speed(cmd.get("delta", 0))
+            
+        elif cmd_type == "anim_speed":
+            delta = cmd.get("delta", 0)
+            self.frames_per_step = max(5, min(100, self.frames_per_step + delta))
+            print(f"[WoZ] Received anim_speed command. New speed: {self.frames_per_step} frames/step")
+            self.sim_status = f"Visual speed: {self.frames_per_step} frames/step"
 
     # ── Rendering (on_draw, same pattern as MCSandTable) ────
 
@@ -247,7 +255,12 @@ class Cell2FireSandbox(pyglet.window.Window):
             terrain = self.renderer.generate_terrain_image(self.elevation, self.fuel_grid)
             fire = None
             if self.current_fire_grid is not None:
-                fire = self.renderer.generate_fire_overlay(self.current_fire_grid, self.frame)
+                fire = self.renderer.generate_fire_overlay(
+                    self.current_fire_grid, 
+                    getattr(self, "next_fire_grid", None), 
+                    getattr(self, "fire_blend", 0.0), 
+                    self.frame
+                )
 
             show_marker = self.ignition_point is not None and not self.sim_running
             final = self.renderer.composite(terrain, fire, self.ignition_point, show_marker)
@@ -359,6 +372,7 @@ class Cell2FireSandbox(pyglet.window.Window):
         self.fuel_grid = cached["fuel"]
         self.terrain_captured = True
         self.time_step = 0
+        self.anim_frame = 0
         self.sim_running = True
         self.current_fire_grid = None
         self.sim_status = f"Playing — {len(self.fire_grids)} steps"
@@ -370,6 +384,7 @@ class Cell2FireSandbox(pyglet.window.Window):
         self.sim_running = False
         self.fire_grids = []
         self.time_step = 0
+        self.anim_frame = 0
         self.current_fire_grid = None
         grids = self.sim_bridge.run_simulation(
             ignition_cells=[self.ignition_cell_id],
@@ -390,6 +405,7 @@ class Cell2FireSandbox(pyglet.window.Window):
         self.ignition_point = None
         self.ignition_cell_id = None
         self.time_step = 0
+        self.anim_frame = 0
         if self.terrain_captured:
             self.sim_status = "Click to ignite, F to precompute, P to play."
         else:
@@ -412,12 +428,26 @@ class Cell2FireSandbox(pyglet.window.Window):
     def _advance_fire(self):
         if not self.sim_running or not self.fire_grids:
             return
-        if self.time_step < len(self.fire_grids):
+
+        self.time_step = self.anim_frame // self.frames_per_step
+        
+        if self.time_step < len(self.fire_grids) - 1:
             self.current_fire_grid = self.fire_grids[self.time_step]
-            if self.frame % 5 == 0:
-                self.time_step += 1
+            self.next_fire_grid = self.fire_grids[self.time_step + 1]
+            self.fire_blend = (self.anim_frame % self.frames_per_step) / float(self.frames_per_step)
+            self.anim_frame += 1
+            
+        elif self.time_step < len(self.fire_grids):
+            self.current_fire_grid = self.fire_grids[self.time_step]
+            self.next_fire_grid = None
+            self.fire_blend = 0.0
+            self.anim_frame += 1
+            
         else:
+            self.time_step = len(self.fire_grids) - 1
             self.current_fire_grid = self.fire_grids[-1]
+            self.next_fire_grid = None
+            self.fire_blend = 0.0
             self.sim_status = f"Complete — {len(self.fire_grids)} steps"
 
     # ── Lifecycle ───────────────────────────────────────────
