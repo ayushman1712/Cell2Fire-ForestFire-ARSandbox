@@ -60,18 +60,24 @@ def send_command(cmd_dict: dict):
             with open(WOZ_COMMAND_FILE, "r") as f:
                 cmds = json.load(f)
                 if not isinstance(cmds, list): cmds = []
-        except:
-            pass
+        except (IOError, OSError, json.JSONDecodeError):
+            # If file is busy or empty, start fresh. 
+            # app.py deletes it often, so this is normal.
+            cmds = []
 
     cmds.append(cmd_dict)
     
     # Write back
-    with open(WOZ_COMMAND_FILE, "w") as f:
-        json.dump(cmds, f)
+    try:
+        with open(WOZ_COMMAND_FILE, "w") as f:
+            json.dump(cmds, f)
+    except (IOError, OSError):
+        # If we can't write, the command is lost, but we prevent console freeze
+        pass
     
     if cmd_dict["type"] == "ignite":
         print(f"[WoZ] Sent ignition command: row={cmd_dict.get('row')}, col={cmd_dict.get('col')}")
-    elif cmd_dict["type"] != "firebreak_line": # Don't spam curve segments
+    elif cmd_dict["type"] not in ("firebreak_line", "projection_grid"): # Don't spam frequent updates
         print(f"[WoZ] Sent command: {cmd_dict['type']}")
 
 
@@ -85,7 +91,9 @@ def read_commands():
         # Consume it so we don't re-read
         os.remove(WOZ_COMMAND_FILE)
         return cmds if isinstance(cmds, list) else []
-    except (json.JSONDecodeError, IOError, OSError):
+    except (json.JSONDecodeError, IOError, OSError, PermissionError):
+        # On Windows, PermissionError is common if the other app is writing.
+        # We just skip this poll cycle rather than hanging.
         return []
 
 
@@ -111,7 +119,8 @@ def read_state():
     try:
         with open(WOZ_STATE_FILE, "r") as f:
             return json.load(f)
-    except (json.JSONDecodeError, IOError, OSError):
+    except (json.JSONDecodeError, IOError, OSError, PermissionError):
+        # Fail fast on file contention to keep the Kinect loop fluid
         return None
 
 
@@ -130,7 +139,7 @@ class WizardOfOzConsole:
     WINDOW_NAME = "WoZ Operator - Kinect ROI (Click to Ignite)"
     # Display scale: how much to scale the cropped ROI for comfortable viewing
     DISPLAY_SCALE = 2.5
-    PANEL_HEIGHT = 180  # Height of the controls reference at the bottom
+    PANEL_HEIGHT = 240  # Increased to prevent overlapping of controls
 
     def __init__(self):
         self.kinect = None
@@ -143,8 +152,9 @@ class WizardOfOzConsole:
         self.display_w = int(self.roi_w * self.DISPLAY_SCALE)
         self.display_h = int(self.roi_h * self.DISPLAY_SCALE)
 
-        # Grid overlay
+        # Grid overlays
         self.show_grid = True
+        self.show_proj_grid = False
         self.last_click = None  # (row, col) in sim grid
 
         # Firebreak modes
@@ -158,6 +168,10 @@ class WizardOfOzConsole:
 
         # Persistent state from sandbox app
         self.app_state = {}
+        self._last_state_check = 0 # Loop counter
+
+        # Cached UI elements
+        self._cached_controls_panel = None
 
         # Initialize Kinect
         if HAS_PYKINECT:
@@ -193,7 +207,8 @@ class WizardOfOzConsole:
         print("  +/-         → Adjust wind speed")
         print("  < / >       → Slower / Faster fire spread")
         print("  R           → Send reset command")
-        print("  G           → Toggle grid overlay")
+        print("  G           → Toggle operator grid")
+        print("  T           → Toggle 3x3 projection grid")
         print("  B           → Toggle Straight Firebreak Mode")
         print("  C           → Toggle Curved (Freehand) Mode")
         print("  ESC / Q     → Quit")
@@ -252,15 +267,14 @@ class WizardOfOzConsole:
             self.last_grid_point = None
 
     def _get_depth_frame(self):
-        """Get a raw depth frame from Kinect or fallback."""
+        """Get a raw depth frame from Kinect. Returns None if no new frame."""
         if self.has_kinect and self.kinect is not None:
             if self.kinect.has_new_depth_frame():
                 depth = self.kinect.get_last_depth_frame()
                 return depth.reshape(
                     (config.KINECT_FRAME_HEIGHT, config.KINECT_FRAME_WIDTH)
                 )
-        # Fallback: load static depth image
-        return self._load_fallback()
+        return None
 
     def _load_fallback(self):
         """Load the fallback depth image."""
@@ -342,6 +356,34 @@ class WizardOfOzConsole:
         for r in range(1, config.SIM_ROWS):
             y = int(r * cell_h)
             cv2.line(image, (0, y), (w, y), (255, 255, 255), 1, cv2.LINE_AA)
+
+    def _draw_3x3_grid_overlay(self, image):
+        """Draw the 3x3 projection grid with numbers 1-9 on the operator display."""
+        if not self.show_proj_grid:
+            return
+
+        h, w = image.shape[:2]
+        color = (255, 255, 255)
+        thickness = 2
+        
+        # Grid lines
+        for i in range(1, 3):
+            x = int(i * w / 3)
+            cv2.line(image, (x, 0), (x, h), color, thickness, cv2.LINE_AA)
+            y = int(i * h / 3)
+            cv2.line(image, (0, y), (w, y), color, thickness, cv2.LINE_AA)
+            
+        # Box numbers
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        for row in range(3):
+            for col in range(3):
+                num = row * 3 + col + 1
+                cx = int((col + 0.5) * w / 3)
+                cy = int((row + 0.5) * h / 3)
+                label = str(num)
+                # Draw number with drop shadow
+                cv2.putText(image, label, (cx - 10, cy + 10), font, 1.0, (0, 0, 0), 2, cv2.LINE_AA)
+                cv2.putText(image, label, (cx - 12, cy + 8), font, 1.0, color, 2, cv2.LINE_AA)
 
     def _draw_click_marker(self, image):
         """Draw a crosshair on the last-clicked cell."""
@@ -441,9 +483,18 @@ class WizardOfOzConsole:
         cv2.putText(image, g_text, (w - 120, h - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1,
                     cv2.LINE_AA)
+        
+        # Projection grid indicator
+        t_text = "[T]-Proj: ON" if getattr(self, 'show_proj_grid', False) else "[T]-Proj: OFF"
+        cv2.putText(image, t_text, (w - 240, h - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1,
+                    cv2.LINE_AA)
 
     def _draw_controls_panel(self):
-        """Build a panel image showing all operator controls."""
+        """Build a panel image showing all operator controls (cached)."""
+        if self._cached_controls_panel is not None:
+            return self._cached_controls_panel
+
         panel = np.zeros((self.PANEL_HEIGHT, self.display_w, 3), dtype=np.uint8)
         panel[:] = (40, 40, 40) # Dark grey background
 
@@ -462,7 +513,8 @@ class WizardOfOzConsole:
             ("F", "Precompute"),
             ("P", "Play Cache"),
             ("R", "Reset Mode"),
-            ("G", "Grid Toggle"),
+            ("G", "Op Grid Toggle"),
+            ("T", "Proj Grid Toggle"),
             ("W/A/S/D", "Wind Direction"),
             ("+ / -", "Wind Speed"),
             ("< / >", "Visual Speed"),
@@ -473,11 +525,11 @@ class WizardOfOzConsole:
         col1_x = 30
         col2_x = self.display_w // 2 + 30
         row_y = 70
-        dy = 25
+        dy = 24
 
         for i, (key_name, desc) in enumerate(controls):
-            cx = col1_x if i < 6 else col2_x
-            cy = row_y + (i % 6) * dy
+            cx = col1_x if i < 7 else col2_x
+            cy = row_y + (i % 7) * dy
             
             # Key pill
             cv2.putText(panel, f"[{key_name}]", (cx, cy),
@@ -486,6 +538,7 @@ class WizardOfOzConsole:
             cv2.putText(panel, f": {desc}", (cx + 80, cy),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
 
+        self._cached_controls_panel = panel
         return panel
 
     def run(self):
@@ -500,8 +553,15 @@ class WizardOfOzConsole:
             if depth is not None:
                 last_frame = depth
             elif last_frame is not None:
+                # Reuse last successful frame in memory.
+                # Do NOT hit the disk for fallback unless we have NO frame at all.
                 depth = last_frame
             else:
+                # Handle initial startup where no frame is available yet
+                depth = self._load_fallback()
+                last_frame = depth
+
+            if depth is None:
                 # No frame at all yet — show placeholder
                 placeholder = np.zeros(
                     (self.display_h, self.display_w, 3), dtype=np.uint8
@@ -538,6 +598,7 @@ class WizardOfOzConsole:
 
             # Overlays
             self._draw_grid_overlay(display)
+            self._draw_3x3_grid_overlay(display)
             self._draw_click_marker(display)
             self._draw_persistent_firebreaks(display)
             self._draw_firebreak_markers(display)
@@ -555,7 +616,11 @@ class WizardOfOzConsole:
                 break
             elif k == ord("g"):
                 self.show_grid = not self.show_grid
-                print(f"[WoZ] Grid overlay: {'ON' if self.show_grid else 'OFF'}")
+                print(f"[WoZ] Operator grid overlay: {'ON' if self.show_grid else 'OFF'}")
+            elif k == ord("t") or k == ord("T"):
+                self.show_proj_grid = not self.show_proj_grid
+                send_command({"type": "projection_grid", "value": self.show_proj_grid})
+                print(f"[WoZ] 3x3 Projection grid command: {'ON' if self.show_proj_grid else 'OFF'}")
             elif k == ord("b") or k == ord("B"):
                 self.firebreak_mode = not self.firebreak_mode
                 self.curve_mode = False
@@ -592,10 +657,15 @@ class WizardOfOzConsole:
             elif k == ord("."):  # Faster animation (fewer frames per step)
                 send_command({"type": "anim_speed", "delta": -5})
 
-            # Poll for state updates from sandbox app
-            new_state = read_state()
-            if new_state:
-                self.app_state = new_state
+            # Poll for state updates periodically (don't hammer the disk)
+            self._last_state_check += 1
+            if self._last_state_check % 10 == 0:
+                new_state = read_state()
+                if new_state:
+                    self.app_state = new_state
+                    # Sync local grid toggle from app state
+                    if "show_grid" in new_state:
+                        self.show_proj_grid = new_state["show_grid"]
 
         # Cleanup
         cv2.destroyAllWindows()

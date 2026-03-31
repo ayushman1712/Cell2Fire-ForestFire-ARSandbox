@@ -258,3 +258,48 @@ class SandboxRenderer:
             cv2.line(result, (cx, cy - r), (cx, cy + r), (255, 255, 0), 1, cv2.LINE_AA)
 
         return result
+
+    def draw_3x3_grid(self, image):
+        """Draw a heavy 3x3 grid with box numbers 1-9.
+        
+        This divides the entire sandbox into 9 equal regions for coordination.
+        """
+        if not HAS_CV2:
+            return image
+            
+        h, w = image.shape[:2]
+        color = (255, 255, 255) # White
+        thickness = 2
+        
+        # Vertical lines
+        for i in range(1, 3):
+            x = int(i * w / 3)
+            cv2.line(image, (x, 0), (x, h), color, thickness, cv2.LINE_AA)
+            
+        # Horizontal lines
+        for i in range(1, 3):
+            y = int(i * h / 3)
+            cv2.line(image, (0, y), (w, y), color, thickness, cv2.LINE_AA)
+            
+        # Draw numbers 1-9
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1.0 # Large and clear
+        font_thickness = 2
+        
+        for row in range(3):
+            for col in range(3):
+                num = row * 3 + col + 1
+                # Center of the cell
+                cx = int((col + 0.5) * w / 3)
+                cy = int((row + 0.5) * h / 3)
+                
+                label = str(num)
+                text_size = cv2.getTextSize(label, font, font_scale, font_thickness)[0]
+                tx = cx - text_size[0] // 2
+                ty = cy + text_size[1] // 2
+                
+                # Subtle drop shadow for readability on mixed terrain
+                cv2.putText(image, label, (tx + 2, ty + 2), font, font_scale, (0, 0, 0), font_thickness, cv2.LINE_AA)
+                cv2.putText(image, label, (tx, ty), font, font_scale, color, font_thickness, cv2.LINE_AA)
+                
+        return image

@@ -96,6 +96,7 @@ class Cell2FireSandbox(pyglet.window.Window):
         self.sim_status = "Press SPACE to capture terrain"
 
         self.weather_params = config.DEFAULT_WEATHER.copy()
+        self.show_projection_grid = False
 
         # ── HUD Labels ──
         self.fps_display = pyglet.window.FPSDisplay(window=self, color=(255, 0, 0, 255))
@@ -211,9 +212,9 @@ class Cell2FireSandbox(pyglet.window.Window):
                 print(f"[WoZ] Ignition at ({row}, {col}), cell ID={self.ignition_cell_id}")
 
                 if self._depth_frame is not None:
-                    # This overwrites all asc files including Forest.asc
+                    # Sync and prepare terrain/fuel files for the C++ engine
                     self.sim_bridge.prepare_terrain(self._depth_frame)
-                    # Overwrite Forest.asc with our modified fuel_grid that contains firebreaks
+                    # Overwrite Forest.asc with the latest fuel_grid (including any new firebreaks/water)
                     forest_asc = os.path.join(self.sim_bridge.sim_data_dir, "Forest.asc")
                     self.terrain_gen.write_asc(self.fuel_grid, forest_asc, config.CELL_SIZE_METERS)
                     
@@ -259,6 +260,12 @@ class Cell2FireSandbox(pyglet.window.Window):
                 self.frames_per_step = max(5, min(100, self.frames_per_step + delta))
                 print(f"[WoZ] Received anim_speed command. New speed: {self.frames_per_step} frames/step")
                 self.sim_status = f"Visual speed: {self.frames_per_step} frames/step"
+                
+            elif cmd_type == "projection_grid":
+                self.show_projection_grid = cmd.get("value", False)
+                print(f"[WoZ] 3x3 Grid projection: {'ON' if self.show_projection_grid else 'OFF'}")
+                self.sim_status = f"3x3 Grid projection: {'ON' if self.show_projection_grid else 'OFF'}"
+                self._sync_woz_state() # Ensure WoZ console is in sync
 
     # ── Rendering (on_draw, same pattern as MCSandTable) ────
 
@@ -282,6 +289,10 @@ class Cell2FireSandbox(pyglet.window.Window):
 
             show_marker = self.ignition_point is not None and not self.sim_running
             final = self.renderer.composite(terrain, fire, self.ignition_point, show_marker)
+
+            # Draw 3x3 grid if enabled
+            if self.show_projection_grid:
+                self.renderer.draw_3x3_grid(final)
 
             # Convert to pyglet and blit (same as MCSandTable)
             pimg = self.numpy_to_pyglet(final)
@@ -371,6 +382,10 @@ class Cell2FireSandbox(pyglet.window.Window):
         r, c = config.DEFAULT_IGNITION_ROW, config.DEFAULT_IGNITION_COL
         self.sim_status = f"Precomputing from ({r}, {c})..."
         print(f"[App] Precomputing from ({r}, {c})...")
+        # Ensure latest fuel/firebreaks are saved for the engine
+        forest_asc = os.path.join(self.sim_bridge.sim_data_dir, "Forest.asc")
+        self.terrain_gen.write_asc(self.fuel_grid, forest_asc, config.CELL_SIZE_METERS)
+        
         grids = self.sim_bridge.precompute_and_save(
             self._depth_frame, r, c, self.weather_params,
         )
@@ -513,9 +528,9 @@ class Cell2FireSandbox(pyglet.window.Window):
                     if self.fuel_grid[r, c] != 102:
                         self.fuel_grid[r, c] = 103
 
-        # Ensure changes are saved to disk for the engine
-        forest_asc = os.path.join(self.sim_bridge.sim_data_dir, "Forest.asc")
-        self.terrain_gen.write_asc(self.fuel_grid, forest_asc, config.CELL_SIZE_METERS)
+        # We no longer write to disk here. 
+        # File I/O is expensive and causes freezes in the WoZ console during drawing.
+        # Forest.asc is now updated ONLY when simulation starts or precomputes.
 
     def _sync_woz_state(self):
         """Export established firebreak coordinates to the WoZ operator console."""
@@ -524,7 +539,10 @@ class Cell2FireSandbox(pyglet.window.Window):
         
         rows, cols = np.where(self.fuel_grid == 103)
         firebreaks = list(zip(rows.tolist(), cols.tolist()))
-        write_state({"firebreaks": firebreaks})
+        write_state({
+            "firebreaks": firebreaks,
+            "show_grid": self.show_projection_grid
+        })
 
     # ── Lifecycle ───────────────────────────────────────────
 
