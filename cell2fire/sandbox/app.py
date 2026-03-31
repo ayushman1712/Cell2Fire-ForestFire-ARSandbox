@@ -97,6 +97,12 @@ class Cell2FireSandbox(pyglet.window.Window):
 
         self.weather_params = config.DEFAULT_WEATHER.copy()
         self.show_projection_grid = False
+        
+        self.paused = False
+        self.show_hud_text = True
+        self.burn_pct = 0.0
+        self.sim_time_str = "00:00"
+        self._total_fuel_cells = 0
 
         # ── HUD Labels ──
         self.fps_display = pyglet.window.FPSDisplay(window=self, color=(255, 0, 0, 255))
@@ -127,6 +133,16 @@ class Cell2FireSandbox(pyglet.window.Window):
             "", font_name="Consolas", font_size=10,
             x=self.width - 60, y=self.height - 110,
             anchor_x="center", color=(200, 200, 255, 220),
+        )
+        self.time_label = pyglet.text.Label(
+            "", font_name="Consolas", font_size=18,
+            x=self.width // 2, y=self.height - 35, anchor_x="center",
+            color=(255, 255, 255, 255),
+        )
+        self.burn_label = pyglet.text.Label(
+            "", font_name="Consolas", font_size=14,
+            x=self.width // 2, y=self.height - 65, anchor_x="center",
+            color=(255, 200, 150, 220),
         )
 
         # ── Projector flip ──
@@ -203,13 +219,15 @@ class Cell2FireSandbox(pyglet.window.Window):
 
                 fuel_val = int(self.fuel_grid[row, col])
                 if fuel_val in {100, 101, 102, 103, 104, 105}:
-                    self.sim_status = f"WoZ: Non-fuel cell at ({row}, {col})"
+                    self.sim_status = f"Non-fuel at ({row}, {col})"
+                    self._sync_woz_state()
                     continue
 
                 self.ignition_point = (row, col)
                 self.ignition_cell_id = row * config.SIM_COLS + col + 1
-                self.sim_status = f"WoZ fire at ({row}, {col})..."
+                self.sim_status = f"Ignition at ({row}, {col})"
                 print(f"[WoZ] Ignition at ({row}, {col}), cell ID={self.ignition_cell_id}")
+                self._sync_woz_state() # Clear previous "Non-fuel" status
 
                 if self._depth_frame is not None:
                     # Sync and prepare terrain/fuel files for the C++ engine
@@ -266,6 +284,17 @@ class Cell2FireSandbox(pyglet.window.Window):
                 print(f"[WoZ] 3x3 Grid projection: {'ON' if self.show_projection_grid else 'OFF'}")
                 self.sim_status = f"3x3 Grid projection: {'ON' if self.show_projection_grid else 'OFF'}"
                 self._sync_woz_state() # Ensure WoZ console is in sync
+            
+            elif cmd_type == "toggle_pause":
+                self.paused = not self.paused
+                print(f"[WoZ] Simulation paused: {self.paused}")
+                self.sim_status = f"{'PAUSED' if self.paused else 'RESUMED'}"
+                self._sync_woz_state()
+                
+            elif cmd_type == "toggle_hud":
+                self.show_hud_text = not self.show_hud_text
+                print(f"[WoZ] HUD visibility: {self.show_hud_text}")
+                self._sync_woz_state()
 
     # ── Rendering (on_draw, same pattern as MCSandTable) ────
 
@@ -298,61 +327,100 @@ class Cell2FireSandbox(pyglet.window.Window):
             pimg = self.numpy_to_pyglet(final)
             pimg.blit(0, 0, width=self.width, height=self.height)
 
-        # HUD
         self._draw_hud()
         self._draw_wind_indicator()
         self.fps_display.draw()
+        
+        # Periodic state sync to operator console
+        if self.frame % 10 == 0:
+            self._sync_woz_state()
+            
         self.frame += 1
 
     def _draw_hud(self):
         """Draw HUD labels."""
+        if not self.show_hud_text:
+            return
+            
         wp = self.weather_params
         self.status_label.text = self.sim_status
         self.step_label.text = f"Step: {self.time_step}"
         self.weather_label.text = f"T:{wp['TMP']}°C  RH:{wp['RH']}%"
+        self.time_label.text = self.sim_time_str
+        self.burn_label.text = f"BURNED: {self.burn_pct:.1f}%"
+        
         self.status_label.draw()
         self.step_label.draw()
         self.weather_label.draw()
         self.controls_label.draw()
+        self.time_label.draw()
+        self.burn_label.draw()
 
     def _draw_wind_indicator(self):
-        """Draw wind arrow in top-right corner using pyglet shapes."""
-        cx = self.width - 60
-        cy = self.height - 60
+        """Draw a prominent wind dial in the top-right corner."""
+        # Positioning
+        radius = 50
+        cx = self.width - radius - 20
+        cy = self.height - radius - 60
+        
         wp = self.weather_params
         direction_deg = wp.get("WD", 270)
         speed = wp.get("WS", 20)
 
-        # Circle outline
-        circle = pyglet.shapes.Arc(cx, cy, 40, color=(60, 60, 80))
+        # 1. Background plate for contrast
+        bg = pyglet.shapes.Circle(cx, cy, radius + 15, color=(0, 0, 0, 160))
+        bg.draw()
+
+        # 2. Outer ring
+        circle = pyglet.shapes.Arc(cx, cy, radius, color=(100, 100, 150, 200))
         circle.draw()
 
-        # Arrow
-        angle_rad = math.radians(direction_deg)
-        arrow_len = 30
-        dx = arrow_len * math.sin(angle_rad)
-        dy = arrow_len * math.cos(angle_rad)  # pyglet y-up matches compass
+        # 3. Direction Markers (N/S/E/W)
+        markers = [
+            ("N", 0, 1), ("E", 1, 0), ("S", 0, -1), ("W", -1, 0)
+        ]
+        mlabels = []
+        for text, dx, dy in markers:
+            mlabels.append(pyglet.text.Label(
+                text, font_name="Consolas", font_size=8,
+                x=cx + dx*(radius-12), y=cy + dy*(radius-12),
+                anchor_x="center", anchor_y="center",
+                color=(150, 150, 200, 200)
+            ))
+            mlabels[-1].draw()
 
+        # 4. Arrow
+        angle_rad = math.radians(direction_deg)
+        arrow_len = radius - 5
+        dx = arrow_len * math.sin(angle_rad)
+        dy = arrow_len * math.cos(angle_rad)
+
+        # Main shaft
         line = pyglet.shapes.Line(
-            cx - dx * 0.3, cy - dy * 0.3, cx + dx, cy + dy,
-            thickness=3, color=(200, 200, 255),
+            cx - dx * 0.2, cy - dy * 0.2, cx + dx, cy + dy,
+            thickness=6, color=(150, 200, 255, 255),
         )
         line.draw()
 
         # Arrowhead
-        head_len = 10
+        head_len = 15
         la = angle_rad + math.radians(150)
         ra = angle_rad - math.radians(150)
         tri = pyglet.shapes.Triangle(
             cx + dx, cy + dy,
             cx + dx + head_len * math.sin(la), cy + dy + head_len * math.cos(la),
             cx + dx + head_len * math.sin(ra), cy + dy + head_len * math.cos(ra),
-            color=(200, 200, 255),
+            color=(150, 200, 255, 255),
         )
         tri.draw()
 
-        # Labels
+        # 5. Text data
+        self.wind_label.x = cx
+        self.wind_label.y = cy + radius + 25
         self.wind_label.draw()
+        
+        self.wind_speed_label.x = cx
+        self.wind_speed_label.y = cy - radius - 25
         self.wind_speed_label.text = f"{speed:.0f} km/h"
         self.wind_speed_label.draw()
 
@@ -369,6 +437,8 @@ class Cell2FireSandbox(pyglet.window.Window):
         result = self.sim_bridge.prepare_terrain(depth)
         self.elevation = result["elevation"]
         self.fuel_grid = result["fuel"]
+        # Exclude non-fuel cells (water=102, non-burnable=101) from burn percentage
+        self._total_fuel_cells = np.count_nonzero((self.fuel_grid != 101) & (self.fuel_grid != 102))
         self.terrain_captured = True
         self._reset_simulation()
         self._sync_woz_state()  # Reset operator view
@@ -463,8 +533,28 @@ class Cell2FireSandbox(pyglet.window.Window):
         if not self.sim_running or not self.fire_grids:
             return
 
+        # Calculate logical step
         self.time_step = self.anim_frame // self.frames_per_step
         
+        # Update HUD stats (Time and Burn %)
+        # Each grid frame corresponds to one Weather Period in Cell2Fire,
+        # which is 60 minutes by default.
+        total_hours = self.time_step  # Step index = number of elapsed hours
+        days = total_hours // 24
+        hrs = total_hours % 24
+        if days > 0:
+            self.sim_time_str = f"{days} Day{'s' if days > 1 else ''} {hrs:02d} hrs elapsed"
+        else:
+            self.sim_time_str = f"{hrs:02d} hrs elapsed"
+        
+        # Burn percentage
+        if self.current_fire_grid is not None and self._total_fuel_cells > 0:
+            burned_cells = np.count_nonzero(self.current_fire_grid >= 1)
+            self.burn_pct = (burned_cells / self._total_fuel_cells) * 100
+        
+        if self.paused:
+            return # Skip animation frame advancing if paused
+
         if self.time_step < len(self.fire_grids) - 1:
             self.current_fire_grid = self.fire_grids[self.time_step]
             self.next_fire_grid = self.fire_grids[self.time_step + 1]
@@ -541,7 +631,12 @@ class Cell2FireSandbox(pyglet.window.Window):
         firebreaks = list(zip(rows.tolist(), cols.tolist()))
         write_state({
             "firebreaks": firebreaks,
-            "show_grid": self.show_projection_grid
+            "show_grid": self.show_projection_grid,
+            "paused": self.paused,
+            "show_hud": self.show_hud_text,
+            "burn_pct": self.burn_pct,
+            "sim_time": self.sim_time_str,
+            "status": self.sim_status
         })
 
     # ── Lifecycle ───────────────────────────────────────────

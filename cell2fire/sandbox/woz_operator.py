@@ -139,7 +139,7 @@ class WizardOfOzConsole:
     WINDOW_NAME = "WoZ Operator - Kinect ROI (Click to Ignite)"
     # Display scale: how much to scale the cropped ROI for comfortable viewing
     DISPLAY_SCALE = 2.5
-    PANEL_HEIGHT = 240  # Increased to prevent overlapping of controls
+    PANEL_HEIGHT = 300  # Increased for simulation status and control labels
 
     def __init__(self):
         self.kinect = None
@@ -169,6 +169,13 @@ class WizardOfOzConsole:
         # Persistent state from sandbox app
         self.app_state = {}
         self._last_state_check = 0 # Loop counter
+        
+        # New Feature State
+        self.paused = False
+        self.show_hud = True
+        self.burn_pct = 0.0
+        self.sim_time = "00:00"
+        self.app_status = ""
 
         # Cached UI elements
         self._cached_controls_panel = None
@@ -202,13 +209,15 @@ class WizardOfOzConsole:
         print("  LEFT CLICK  → Set fire ignition point")
         print("  SPACE       → Capture terrain")
         print("  F           → Precompute simulation")
-        print("  P           → Play cached simulation")
+        print("  L           → Play cached simulation")
+        print("  P           → Pause / Resume animation")
         print("  W/A/S/D     → Wind direction (N/W/S/E)")
         print("  +/-         → Adjust wind speed")
         print("  < / >       → Slower / Faster fire spread")
         print("  R           → Send reset command")
         print("  G           → Toggle operator grid")
         print("  T           → Toggle 3x3 projection grid")
+        print("  H           → Toggle HUD (Time/Burn %)")
         print("  B           → Toggle Straight Firebreak Mode")
         print("  C           → Toggle Curved (Freehand) Mode")
         print("  ESC / Q     → Quit")
@@ -458,25 +467,39 @@ class WizardOfOzConsole:
         """Draw a status bar at the bottom of the display."""
         h, w = image.shape[:2]
         bar_h = 30
-        cv2.rectangle(image, (0, h - bar_h), (w, h), (30, 30, 30), -1)
+        # Status bar color can change based on warning
+        bar_color = (30, 30, 30)
+        if "Non-fuel" in self.app_status or "Failed" in self.app_status:
+            bar_color = (0, 0, 120)  # Dark red warning
+            
+        cv2.rectangle(image, (0, h - bar_h), (w, h), bar_color, -1)
 
-        status = "LIVE KINECT" if self.has_kinect else "FALLBACK IMAGE"
-        grid_text = f"Grid: {config.SIM_ROWS}x{config.SIM_COLS}"
-        click_text = (
-            f"Last: ({self.last_click[0]},{self.last_click[1]})"
-            if self.last_click
-            else "Ready"
-        )
-        if self.curve_mode:
-            mode_text = "| MODE: CURVED BREAK"
-        elif self.firebreak_mode:
-            mode_text = "| MODE: STRAIGHT BREAK"
-        else:
-            mode_text = "| MODE: IGNITION"
+        # Draw live status in corners
+        status_txt = "LIVE KINECT" if self.has_kinect else "FALLBACK"
+        cv2.putText(image, status_txt, (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
+        
+        # Draw central status message (Ignition info/warnings)
+        display_status = self.app_status if self.app_status else "System Ready..."
+        cv2.putText(image, display_status, (w // 2 - (len(display_status) * 4), h - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
-        cv2.putText(image, f"[{status}]  {grid_text}  |  {click_text}  {mode_text}",
-                    (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                    (200, 200, 200), 1, cv2.LINE_AA)
+        # Draw HUD (Time/Burn) at Top-Center like Sandbox App
+        if self.show_hud:
+            hud_w, hud_h = 280, 50
+            hud_x = (w - hud_w) // 2
+            hud_y = 10
+            
+            # Create a semi-transparent dark overlay for the HUD
+            overlay = image.copy()
+            cv2.rectangle(overlay, (hud_x, hud_y), (hud_x + hud_w, hud_y + hud_h), (20, 20, 20), -1)
+            cv2.addWeighted(overlay, 0.6, image, 0.4, 0, image)
+            
+            # Center the time text based on its length (simple approximation)
+            time_str = f"ELAPSED: {self.sim_time}"
+            cv2.putText(image, time_str, (hud_x + 20, hud_y + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(image, f"BURNED: {self.burn_pct:.1f}%", (hud_x + 80, hud_y + 42),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 255), 1, cv2.LINE_AA)
 
         # Grid toggle indicator
         g_text = "[G]rid: ON" if self.show_grid else "[G]rid: OFF"
@@ -491,10 +514,7 @@ class WizardOfOzConsole:
                     cv2.LINE_AA)
 
     def _draw_controls_panel(self):
-        """Build a panel image showing all operator controls (cached)."""
-        if self._cached_controls_panel is not None:
-            return self._cached_controls_panel
-
+        """Build a panel image showing all operator controls and current status."""
         panel = np.zeros((self.PANEL_HEIGHT, self.display_w, 3), dtype=np.uint8)
         panel[:] = (40, 40, 40) # Dark grey background
 
@@ -511,7 +531,9 @@ class WizardOfOzConsole:
             ("B", "Straight Break"),
             ("C", "Curved Break"),
             ("F", "Precompute"),
-            ("P", "Play Cache"),
+            ("L", "Play Cache"),
+            ("P", "Pause / Resume"),
+            ("H", "HUD Toggle"),
             ("R", "Reset Mode"),
             ("G", "Op Grid Toggle"),
             ("T", "Proj Grid Toggle"),
@@ -525,11 +547,11 @@ class WizardOfOzConsole:
         col1_x = 30
         col2_x = self.display_w // 2 + 30
         row_y = 70
-        dy = 24
+        dy = 22
 
         for i, (key_name, desc) in enumerate(controls):
-            cx = col1_x if i < 7 else col2_x
-            cy = row_y + (i % 7) * dy
+            cx = col1_x if i < 8 else col2_x
+            cy = row_y + (i % 8) * dy
             
             # Key pill
             cv2.putText(panel, f"[{key_name}]", (cx, cy),
@@ -538,7 +560,16 @@ class WizardOfOzConsole:
             cv2.putText(panel, f": {desc}", (cx + 80, cy),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
 
-        self._cached_controls_panel = panel
+        # Draw Status Section at the bottom of the panel
+        status_y = self.PANEL_HEIGHT - 35
+        cv2.rectangle(panel, (20, status_y - 25), (self.display_w - 20, self.PANEL_HEIGHT - 10), (20, 20, 20), -1)
+        cv2.putText(panel, "SIMULATION STATUS:", (30, status_y - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+        
+        status_msg = self.app_status if self.app_status else "System Ready..."
+        cv2.putText(panel, status_msg, (200, status_y - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
         return panel
 
     def run(self):
@@ -548,6 +579,19 @@ class WizardOfOzConsole:
         last_frame = None
 
         while True:
+            # Poll app state every 5 iterations to keep UI reactive
+            self._last_state_check += 1
+            if self._last_state_check % 5 == 0:
+                state = read_state()
+                if state:
+                    self.app_state = state
+                    self.show_proj_grid = state.get("show_grid", self.show_proj_grid)
+                    self.paused = state.get("paused", self.paused)
+                    self.show_hud = state.get("show_hud", self.show_hud)
+                    self.burn_pct = state.get("burn_pct", self.burn_pct)
+                    self.sim_time = state.get("sim_time", self.sim_time)
+                    self.app_status = state.get("status", self.app_status)
+
             # Grab depth
             depth = self._get_depth_frame()
             if depth is not None:
@@ -635,8 +679,12 @@ class WizardOfOzConsole:
                 send_command({"type": "capture"})
             elif k == ord("f") or k == ord("F"):
                 send_command({"type": "precompute"})
-            elif k == ord("p") or k == ord("P"):
+            elif k == ord("l") or k == ord("L"):
                 send_command({"type": "play"})
+            elif k == ord("p") or k == ord("P"):
+                send_command({"type": "toggle_pause"})
+            elif k == ord("h") or k == ord("H"):
+                send_command({"type": "toggle_hud"})
             elif k == ord("r") or k == ord("R"):
                 send_command({"type": "reset"})
                 self.last_click = None
@@ -663,9 +711,13 @@ class WizardOfOzConsole:
                 new_state = read_state()
                 if new_state:
                     self.app_state = new_state
-                    # Sync local grid toggle from app state
-                    if "show_grid" in new_state:
-                        self.show_proj_grid = new_state["show_grid"]
+                    # Sync local states from app state
+                    self.show_proj_grid = new_state.get("show_grid", self.show_proj_grid)
+                    self.paused = new_state.get("paused", self.paused)
+                    self.show_hud = new_state.get("show_hud", self.show_hud)
+                    self.burn_pct = new_state.get("burn_pct", self.burn_pct)
+                    self.sim_time = new_state.get("sim_time", self.sim_time)
+                    self.app_status = new_state.get("status", "")
 
         # Cleanup
         cv2.destroyAllWindows()
