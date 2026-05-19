@@ -105,7 +105,9 @@ class Cell2FireSandbox(pyglet.window.Window):
         self._total_fuel_cells = 0
 
         # ── HUD Labels ──
-        self.fps_display = pyglet.window.FPSDisplay(window=self, color=(255, 0, 0, 255))
+        self.fps_display = pyglet.window.FPSDisplay(window=self)
+        if hasattr(self.fps_display, 'label'):
+            self.fps_display.label.color = (255, 0, 0, 255)
         self.status_label = pyglet.text.Label(
             "", font_name="Consolas", font_size=12,
             x=10, y=self.height - 20, color=(255, 255, 255, 220),
@@ -166,12 +168,9 @@ class Cell2FireSandbox(pyglet.window.Window):
     # ── Canvas Flip (same as AR Sandbox) ────────────────────
 
     def flip_canvas(self, _=None):
-        """Rotate 180° for overhead projector (identical to MCSandTable)."""
-        from pyglet.math import Mat4, Vec3
-        ortho = Mat4.orthogonal_projection(0, self.width, 0, self.height, -255, 255)
-        translate = Mat4.from_translation(Vec3(self.width, self.height, 0))
-        rotate = Mat4.from_rotation(3.14, Vec3(0, 0, 1))
-        self.projection = ortho @ translate @ rotate
+        """Rotate 180° for overhead projector."""
+        self._flipped = True
+        self.on_resize(self.width, self.height)
 
     # ── Numpy → Pyglet (same pattern as MCSandTable.create_pyglet_img) ──
 
@@ -368,11 +367,13 @@ class Cell2FireSandbox(pyglet.window.Window):
         speed = wp.get("WS", 20)
 
         # 1. Background plate for contrast
-        bg = pyglet.shapes.Circle(cx, cy, radius + 15, color=(0, 0, 0, 160))
+        bg = pyglet.shapes.Circle(cx, cy, radius + 15, color=(0, 0, 0))
+        bg.opacity = 160
         bg.draw()
 
         # 2. Outer ring
-        circle = pyglet.shapes.Arc(cx, cy, radius, color=(100, 100, 150, 200))
+        circle = pyglet.shapes.Arc(cx, cy, radius, color=(100, 100, 150))
+        circle.opacity = 200
         circle.draw()
 
         # 3. Direction Markers (N/S/E/W)
@@ -398,7 +399,7 @@ class Cell2FireSandbox(pyglet.window.Window):
         # Main shaft
         line = pyglet.shapes.Line(
             cx - dx * 0.2, cy - dy * 0.2, cx + dx, cy + dy,
-            thickness=6, color=(150, 200, 255, 255),
+            width=6, color=(150, 200, 255)
         )
         line.draw()
 
@@ -410,7 +411,7 @@ class Cell2FireSandbox(pyglet.window.Window):
             cx + dx, cy + dy,
             cx + dx + head_len * math.sin(la), cy + dy + head_len * math.cos(la),
             cx + dx + head_len * math.sin(ra), cy + dy + head_len * math.cos(ra),
-            color=(150, 200, 255, 255),
+            color=(150, 200, 255)
         )
         tri.draw()
 
@@ -642,8 +643,15 @@ class Cell2FireSandbox(pyglet.window.Window):
     # ── Lifecycle ───────────────────────────────────────────
 
     def on_resize(self, width, height):
-        if self.fullscreen:
-            self.flip_canvas()
+        if getattr(self, '_flipped', False):
+            from pyglet.gl import glViewport, glMatrixMode, glLoadIdentity, glOrtho, GL_PROJECTION, GL_MODELVIEW, glTranslatef, glRotatef
+            glViewport(0, 0, width, height)
+            glMatrixMode(GL_PROJECTION)
+            glLoadIdentity()
+            glOrtho(0, width, 0, height, -255, 255)
+            glTranslatef(width, height, 0)
+            glRotatef(180, 0, 0, 1)
+            glMatrixMode(GL_MODELVIEW)
             return pyglet.event.EVENT_HANDLED
         return super().on_resize(width, height)
 
@@ -654,7 +662,7 @@ class Cell2FireSandbox(pyglet.window.Window):
         print("[App] Goodbye.")
 
     def run(self):
-        pyglet.app.run(1 / self.fps)
+        pyglet.app.run()
 
 
 def main():
